@@ -1,7 +1,8 @@
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Union
 
 import chromadb
+import pandas as pd
 from sentence_transformers import SentenceTransformer
 
 from load_structured_data import load_courses_csv
@@ -36,25 +37,68 @@ def chunk_text(text: str, chunk_size: int = 800, overlap: int = 100) -> List[str
     return chunks
 
 
+def load_generic_csv(csv_path: Union[str, Path]) -> List[Dict]:
+    csv_path = Path(csv_path)
+
+    if not csv_path.exists():
+        raise FileNotFoundError("CSV não encontrado: {0}".format(csv_path))
+
+    df = pd.read_csv(csv_path)
+    return df.fillna("").to_dict(orient="records")
+
+
 def course_to_text(course: Dict) -> str:
     return (
-        f"Curso: {course.get('curso', '')}\n"
-        f"Escola: {course.get('escola', '')}\n"
-        f"Grau: {course.get('grau', '')}\n"
-        f"Duração: {course.get('duracao_anos', '')} anos\n"
-        f"ECTS: {course.get('ects', '')}\n"
-        f"Regime: {course.get('regime', '')}\n"
-        f"Local: {course.get('local', '')}\n"
-        f"Área: {course.get('area', '')}\n"
-        f"Saídas profissionais: {course.get('saidas_profissionais', '')}\n"
-        f"Fonte: {course.get('fonte', '')}"
+        "Curso: {0}\n"
+        "Escola: {1}\n"
+        "Grau: {2}\n"
+        "Duração: {3} anos\n"
+        "ECTS: {4}\n"
+        "Regime: {5}\n"
+        "Local: {6}\n"
+        "Área: {7}\n"
+        "Saídas profissionais: {8}\n"
+        "Descrição: {9}\n"
+        "Resumo: {10}\n"
+        "Interesses relacionados: {11}\n"
+        "Palavras-chave: {12}\n"
+        "Fonte: {13}"
+    ).format(
+        course.get("curso", ""),
+        course.get("escola", ""),
+        course.get("grau", ""),
+        course.get("duracao_anos", ""),
+        course.get("ects", ""),
+        course.get("regime", ""),
+        course.get("local", ""),
+        course.get("area", ""),
+        course.get("saidas_profissionais", ""),
+        course.get("descricao", ""),
+        course.get("resumo", ""),
+        course.get("interesses_relacionados", ""),
+        course.get("palavras_chave", ""),
+        course.get("fonte", "")
+    )
+
+
+def school_to_text(school: Dict) -> str:
+    return (
+        "Escola: {0}\n"
+        "Sigla: {1}\n"
+        "Local: {2}\n"
+        "Descrição: {3}"
+    ).format(
+        school.get("escola", ""),
+        school.get("sigla", ""),
+        school.get("local", ""),
+        school.get("descricao", "")
     )
 
 
 def build_documents() -> List[Dict]:
     documents = []
 
-    # Dados estruturados (CSV)
+    # Cursos
     courses_path = Path("data/estruturados/cursos_ipvc.csv")
     courses = load_courses_csv(courses_path)
 
@@ -73,7 +117,25 @@ def build_documents() -> List[Dict]:
             }
         })
 
-    # Dados não estruturados (PDFs)
+    # Escolas
+    schools_path = Path("data/estruturados/escolas_ipvc.csv")
+    schools = load_generic_csv(schools_path)
+
+    for idx, school in enumerate(schools):
+        text = school_to_text(school)
+        documents.append({
+            "id": "school_{0}".format(idx),
+            "text": text,
+            "metadata": {
+                "type": "structured_school",
+                "source": "escolas_ipvc.csv",
+                "escola": school.get("escola", ""),
+                "sigla": school.get("sigla", ""),
+                "local": school.get("local", "")
+            }
+        })
+
+    # PDFs
     pdfs_path = Path("data/nao_estruturados")
     pdf_docs = load_all_pdfs(pdfs_path)
 
@@ -105,7 +167,6 @@ def create_vector_database() -> None:
 
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
 
-    # Se já existir, apaga e recria
     existing_collections = client.list_collections()
     existing_names = [collection.name for collection in existing_collections]
 
