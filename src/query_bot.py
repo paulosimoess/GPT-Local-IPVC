@@ -10,21 +10,45 @@ COLLECTION_NAME = "ipvc_courses"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 OLLAMA_MODEL = "llama3:latest"
 
+embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+
 
 def get_collection():
     client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
     return client.get_collection(name=COLLECTION_NAME)
 
 
-def get_embedding_model():
-    return SentenceTransformer(EMBEDDING_MODEL)
+def is_school_question(question: str) -> bool:
+    question_lower = question.lower()
+    keywords = [
+        "que escolas",
+        "quais são as escolas",
+        "escolas do ipvc",
+        "escolas existem",
+        "quais as escolas"
+    ]
+    return any(keyword in question_lower for keyword in keywords)
+
+
+def get_all_school_documents() -> Tuple[List[str], List[dict]]:
+    collection = get_collection()
+
+    results = collection.get(
+        where={"type": "structured_school"}
+    )
+
+    documents = results.get("documents", [])
+    metadatas = results.get("metadatas", [])
+
+    return documents, metadatas
 
 
 def search_relevant_context(question: str, n_results: int = 6) -> Tuple[List[str], List[dict]]:
-    collection = get_collection()
-    model = get_embedding_model()
+    if is_school_question(question):
+        return get_all_school_documents()
 
-    query_embedding = model.encode([question]).tolist()[0]
+    collection = get_collection()
+    query_embedding = embedding_model.encode([question]).tolist()[0]
 
     results = collection.query(
         query_embeddings=[query_embedding],
@@ -46,11 +70,14 @@ def build_prompt(question: str, context_chunks: List[str]) -> str:
 Regras obrigatórias:
 - Responde apenas com base no contexto fornecido.
 - Não inventes informação.
-- Se a informação não estiver no contexto, diz claramente que não foi encontrada.
+- Nunca uses conhecimento externo.
+- Se a resposta não estiver claramente no contexto, responde apenas: "Não encontrei essa informação nos documentos disponíveis."
+- Não faças suposições.
+- Não acrescentes exemplos inventados.
 - Responde em português de Portugal.
-- Sê objetivo, claro e útil.
-- Quando a pergunta pedir listagens, apresenta em tópicos.
-- Quando fizeres recomendações, justifica com base no contexto.
+- Sê claro e objetivo.
+- Se a pergunta pedir listagens, usa tópicos.
+- Se o contexto contiver uma lista completa, apresenta a lista completa.
 
 Contexto:
 {context_text}
@@ -62,7 +89,7 @@ Resposta:
 """.strip()
 
 
-def ask_bot(question: str) -> Tuple[str, List[dict]]:
+def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
     context_chunks, metadatas = search_relevant_context(question)
     prompt = build_prompt(question, context_chunks)
 
@@ -76,7 +103,7 @@ def ask_bot(question: str) -> Tuple[str, List[dict]]:
         ]
     )
 
-    return response["message"]["content"], metadatas
+    return response["message"]["content"], metadatas, context_chunks
 
 
 if __name__ == "__main__":
@@ -90,17 +117,17 @@ if __name__ == "__main__":
             break
 
         try:
-            answer, metadatas = ask_bot(question)
+            answer, metadatas, context_chunks = ask_bot(question)
 
             print("\nFontes recuperadas:")
             for i, meta in enumerate(metadatas, start=1):
                 source = meta.get("source", "desconhecida")
                 doc_type = meta.get("type", "desconhecido")
-                print(f"{i}. {source} ({doc_type})")
+                print("{0}. {1} ({2})".format(i, source, doc_type))
 
             print("\nResposta:")
             print(answer)
             print("\n" + "=" * 80 + "\n")
 
         except Exception as e:
-            print(f"\nErro: {e}\n")
+            print("\nErro: {0}\n".format(e))
