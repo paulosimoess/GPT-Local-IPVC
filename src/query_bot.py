@@ -96,6 +96,73 @@ def detect_degree(question: str) -> Optional[str]:
     return None
 
 
+def is_recommendation_question(question: str) -> bool:
+    question_norm = normalize_text(question)
+
+    keywords = [
+        "aconselhas",
+        "aconselha",
+        "recomendas",
+        "recomenda",
+        "recomendarias",
+        "que curso devo escolher",
+        "que curso escolher",
+        "qual curso devo escolher",
+        "gosto de",
+        "interesse em",
+        "interessado em",
+        "interessada em",
+        "quero trabalhar com",
+        "quero trabalhar na area",
+        "quero trabalhar na área",
+        "quero seguir",
+        "tenho interesse",
+        "o que devo escolher"
+    ]
+
+    return any(normalize_text(keyword) in question_norm for keyword in keywords)
+
+
+def expand_recommendation_query(question: str) -> str:
+    question_norm = normalize_text(question)
+
+    expansions = []
+
+    interest_map = {
+        "animais": "animais veterinaria veterinario saude animal cuidados animais producao animal enfermagem veterinaria",
+        "animal": "animais veterinaria veterinario saude animal cuidados animais producao animal enfermagem veterinaria",
+        "veterinaria": "animais veterinaria veterinario saude animal enfermagem veterinaria",
+        "programacao": "programacao informatica software desenvolvimento aplicacoes engenharia informatica tecnologia computadores",
+        "programar": "programacao informatica software desenvolvimento aplicacoes engenharia informatica tecnologia computadores",
+        "computadores": "informatica computadores redes sistemas programacao tecnologia software",
+        "informatica": "informatica programacao software redes sistemas engenharia informatica",
+        "saude": "saude enfermagem cuidados saude comunitaria saude mental fisioterapia gerontologia",
+        "enfermagem": "saude enfermagem cuidados saude hospitalar comunitaria",
+        "gestao": "gestao empresas administracao contabilidade marketing negocios organizacoes",
+        "empresas": "gestao empresas administracao contabilidade marketing negocios organizacoes",
+        "marketing": "marketing comunicacao vendas gestao comercial",
+        "desporto": "desporto atividade fisica treino exercicio saude bem-estar",
+        "educacao": "educacao ensino criancas formacao intervencao educativa",
+        "criancas": "educacao criancas infancia ensino intervencao educativa",
+        "ambiente": "ambiente sustentabilidade agricultura recursos naturais agronomia",
+        "agricultura": "agricultura agronomia ambiente sustentabilidade recursos naturais",
+        "turismo": "turismo hotelaria gestao turistica patrimonio lazer",
+        "design": "design multimedia criatividade comunicacao visual produto digital",
+        "jogos": "jogos digitais programacao multimedia design tecnologia",
+        "redes": "redes sistemas computadores ciberseguranca informatica infraestrutura",
+        "seguranca": "ciberseguranca seguranca informatica redes sistemas"
+    }
+
+    for keyword, expansion in interest_map.items():
+        if keyword in question_norm:
+            expansions.append(expansion)
+
+    if expansions:
+        return question + " " + " ".join(expansions)
+
+    return question
+
+
 def is_school_question(question: str) -> bool:
     question_norm = normalize_text(question)
 
@@ -206,16 +273,23 @@ def get_courses_filtered(
     return filtered_documents, filtered_metadatas
 
 
-def get_courses_by_school(school_code: str) -> Tuple[List[str], List[dict]]:
-    return get_courses_filtered(school_code=school_code)
+def get_recommended_courses(question: str, n_results: int = 8) -> Tuple[List[str], List[dict]]:
+    collection = get_collection()
+    embedding_model = get_embedding_model()
 
+    expanded_question = expand_recommendation_query(question)
+    query_embedding = embedding_model.encode([expanded_question]).tolist()[0]
 
-def get_courses_by_location(location: str) -> Tuple[List[str], List[dict]]:
-    return get_courses_filtered(location=location)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=n_results,
+        where={"type": "structured_course"}
+    )
 
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
 
-def get_courses_by_degree(degree: str) -> Tuple[List[str], List[dict]]:
-    return get_courses_filtered(degree=degree)
+    return documents, metadatas
 
 
 def build_direct_school_answer(metadatas: List[dict], location: Optional[str] = None) -> str:
@@ -327,18 +401,6 @@ def build_direct_courses_answer(
     return "\n".join(lines)
 
 
-def build_direct_courses_by_school_answer(school_code: str, metadatas: List[dict]) -> str:
-    return build_direct_courses_answer(metadatas, school_code=school_code)
-
-
-def build_direct_courses_by_location_answer(location: str, metadatas: List[dict]) -> str:
-    return build_direct_courses_answer(metadatas, location=location)
-
-
-def build_direct_courses_by_degree_answer(degree: str, metadatas: List[dict]) -> str:
-    return build_direct_courses_answer(metadatas, degree=degree)
-
-
 def search_relevant_context(question: str, n_results: int = 6) -> Tuple[List[str], List[dict]]:
     if is_school_question(question):
         location = detect_location(question)
@@ -404,7 +466,54 @@ Resposta:
 """.strip()
 
 
+def build_recommendation_prompt(question: str, context_chunks: List[str]) -> str:
+    context_text = "\n\n---\n\n".join(context_chunks)
+
+    return f"""
+És um assistente académico especializado na recomendação de cursos e formações do IPVC.
+
+A tua tarefa é recomendar cursos com base nos interesses indicados pelo utilizador.
+
+Regras obrigatórias:
+- Usa apenas os cursos/formações presentes no contexto.
+- Não inventes cursos.
+- Não uses conhecimento externo.
+- Recomenda no máximo 3 opções.
+- Para cada opção, explica brevemente a relação com o interesse do utilizador.
+- Indica o grau quando estiver disponível, por exemplo Licenciatura, Mestrado, Pós-graduação ou CTeSP.
+- Indica a escola quando estiver disponível.
+- Se nenhum curso estiver claramente relacionado com o interesse, responde apenas: "Não encontrei cursos relacionados com esse interesse nos documentos disponíveis."
+- Responde em português de Portugal.
+- Usa tópicos.
+
+Contexto:
+{context_text}
+
+Pergunta do utilizador:
+{question}
+
+Resposta:
+""".strip()
+
+
 def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
+    if is_recommendation_question(question):
+        context_chunks, metadatas = get_recommended_courses(question)
+
+        prompt = build_recommendation_prompt(question, context_chunks)
+
+        response = ollama.chat(
+            model=OLLAMA_MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+
+        return response["message"]["content"], metadatas, context_chunks
+
     context_chunks, metadatas = search_relevant_context(question)
 
     if is_school_question(question):
