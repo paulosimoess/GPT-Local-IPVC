@@ -273,7 +273,7 @@ def get_courses_filtered(
     return filtered_documents, filtered_metadatas
 
 
-def get_recommended_courses(question: str, n_results: int = 8) -> Tuple[List[str], List[dict]]:
+def get_recommended_courses(question: str, n_results: int = 4) -> Tuple[List[str], List[dict]]:
     collection = get_collection()
     embedding_model = get_embedding_model()
 
@@ -466,28 +466,69 @@ Resposta:
 """.strip()
 
 
-def build_recommendation_prompt(question: str, context_chunks: List[str]) -> str:
-    context_text = "\n\n---\n\n".join(context_chunks)
+def build_compact_recommendation_context(metadatas: List[dict]) -> str:
+    lines = []
 
+    for idx, meta in enumerate(metadatas[:4], start=1):
+        curso = meta.get("curso", "")
+        grau = meta.get("grau", "")
+        escola = meta.get("escola", "")
+        area = meta.get("area", "")
+        local = meta.get("local", "")
+        resumo = meta.get("resumo", "")
+        interesses = meta.get("interesses_relacionados", "")
+        palavras_chave = meta.get("palavras_chave", "")
+        saidas = meta.get("saidas_profissionais", "")
+
+        if not curso:
+            continue
+
+        lines.append(
+            f"Opção {idx}:\n"
+            f"Curso: {curso}\n"
+            f"Grau: {grau}\n"
+            f"Escola: {escola}\n"
+            f"Local: {local}\n"
+            f"Área: {area}\n"
+            f"Resumo: {resumo}\n"
+            f"Interesses relacionados: {interesses}\n"
+            f"Palavras-chave: {palavras_chave}\n"
+            f"Saídas profissionais: {saidas}"
+        )
+
+    return "\n\n---\n\n".join(lines)
+
+
+def build_recommendation_prompt(question: str, compact_context: str) -> str:
     return f"""
 És um assistente académico especializado na recomendação de cursos e formações do IPVC.
 
-A tua tarefa é recomendar cursos com base nos interesses indicados pelo utilizador.
+Tarefa:
+Recomendar cursos com base no interesse indicado pelo utilizador.
 
 Regras obrigatórias:
-- Usa apenas os cursos/formações presentes no contexto.
+- Começa sempre a resposta com a frase: "Com base no teu interesse, recomendo:"
+- Usa apenas as opções presentes no contexto.
 - Não inventes cursos.
 - Não uses conhecimento externo.
 - Recomenda no máximo 3 opções.
-- Para cada opção, explica brevemente a relação com o interesse do utilizador.
-- Indica o grau quando estiver disponível, por exemplo Licenciatura, Mestrado, Pós-graduação ou CTeSP.
-- Indica a escola quando estiver disponível.
-- Se nenhum curso estiver claramente relacionado com o interesse, responde apenas: "Não encontrei cursos relacionados com esse interesse nos documentos disponíveis."
+- Não apresentes cursos rejeitados.
+- Para cada opção, escreve apenas uma explicação curta.
+- Indica sempre o nome do curso, o grau e a escola.
 - Responde em português de Portugal.
-- Usa tópicos.
+- Não uses "você".
+- Usa linguagem natural em português europeu.
+- Não uses expressões como "Espero que isso ajude".
+- Não uses markdown com negrito.
+- Usa apenas tópicos simples começados por "-".
+- A resposta deve ser curta e direta.
+- Usa apenas este formato: "- Nome do curso (Grau, Escola, Local) — explicação curta."
+- Não escrevas campos separados como "Curso:", "Grau:", "Escola:", "Local:", "Área:" ou "Resumo:".
+- Não repitas o mesmo curso com o mesmo grau.
+- Não incluas introduções longas.
 
 Contexto:
-{context_text}
+{compact_context}
 
 Pergunta do utilizador:
 {question}
@@ -500,7 +541,8 @@ def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
     if is_recommendation_question(question):
         context_chunks, metadatas = get_recommended_courses(question)
 
-        prompt = build_recommendation_prompt(question, context_chunks)
+        compact_context = build_compact_recommendation_context(metadatas)
+        prompt = build_recommendation_prompt(question, compact_context)
 
         response = ollama.chat(
             model=OLLAMA_MODEL,
@@ -509,7 +551,12 @@ def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
                     "role": "user",
                     "content": prompt
                 }
-            ]
+            ],
+            options={
+        "temperature": 0.1,
+        "num_predict": 200,
+        "num_ctx": 1024
+        }
         )
 
         return response["message"]["content"], metadatas, context_chunks
