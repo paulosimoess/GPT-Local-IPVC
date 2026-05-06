@@ -12,6 +12,7 @@ CHROMA_DB_PATH = "chroma_db"
 COLLECTION_NAME = "ipvc_courses"
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 OLLAMA_MODEL = "llama3:latest"
+FALLBACK_ANSWER = "Não encontrei essa informação nos documentos disponíveis."
 
 
 @lru_cache(maxsize=1)
@@ -400,6 +401,40 @@ def build_direct_courses_answer(
 
     return "\n".join(lines)
 
+def is_out_of_scope_question(question: str) -> bool:
+    question_norm = normalize_text(question)
+
+    # Perguntas sobre outras instituições ou temas claramente externos ao IPVC
+    external_terms = [
+        "universidade do porto",
+        "universidade de lisboa",
+        "universidade de coimbra",
+        "universidade do minho",
+        "instituto superior tecnico",
+        "politecnico do porto",
+        "politecnico de braga",
+        "estados unidos",
+        "presidente dos estados unidos",
+        "restaurante",
+        "meteorologia",
+        "tempo hoje",
+        "futebol",
+        "benfica",
+        "porto",
+        "sporting",
+        "cinema",
+        "filme",
+        "musica",
+        "receita",
+        "cozinhar"
+    ]
+
+    for term in external_terms:
+        if normalize_text(term) in question_norm:
+            return True
+
+    return False
+
 
 def search_relevant_context(question: str, n_results: int = 6) -> Tuple[List[str], List[dict]]:
     if is_school_question(question):
@@ -455,6 +490,11 @@ Regras obrigatórias:
 - Se a pergunta pedir listagens, usa tópicos.
 - Se o contexto contiver uma lista completa, apresenta a lista completa.
 - Não omitas elementos do contexto quando a pergunta pedir uma listagem completa.
+- Se a pergunta estiver fora do âmbito do IPVC, responde exatamente: "Não encontrei essa informação nos documentos disponíveis."
+- Se não existir informação suficiente no contexto, responde exatamente: "Não encontrei essa informação nos documentos disponíveis."
+- Não expliques porque não encontraste informação.
+- Não menciones instituições externas.
+- Nunca alteres o significado da sigla IPVC. IPVC significa Instituto Politécnico de Viana do Castelo.
 
 Contexto:
 {context_text}
@@ -538,6 +578,9 @@ Resposta:
 
 
 def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
+    if is_out_of_scope_question(question):
+        return FALLBACK_ANSWER, [], []
+    
     if is_recommendation_question(question):
         context_chunks, metadatas = get_recommended_courses(question)
 

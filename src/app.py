@@ -1,5 +1,6 @@
 import os
 import random
+import html
 import streamlit as st
 from query_bot import ask_bot
 
@@ -106,8 +107,48 @@ def set_custom_style():
             border-radius: 24px;
             border-bottom-left-radius: 4px;
             box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05);
-            margin-top: 2rem;
+            margin-top: 1.5rem;
             position: relative;
+        }
+
+        .question-bubble {
+            background: #f8fafc;
+            border: 1px solid #dbe4ef;
+            padding: 1.5rem;
+            border-radius: 22px;
+            box-shadow: 0 8px 18px -8px rgba(15, 23, 42, 0.12);
+            margin-top: 2rem;
+        }
+
+        .bubble-title {
+            font-weight: 800;
+            color: #0054A4;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .suggestions-box {
+            background: rgba(255,255,255,0.72);
+            border: 1px solid #e2e8f0;
+            border-radius: 24px;
+            padding: 1.5rem;
+            box-shadow: 0 15px 35px -18px rgba(15, 23, 42, 0.25);
+            margin-top: -3.5rem;
+        }
+
+        .suggestions-title {
+            font-weight: 800;
+            color: #0054A4;
+            font-size: 1.05rem;
+            margin-bottom: 0.35rem;
+        }
+
+        .suggestions-subtitle {
+            color: #64748b;
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
         }
 
         .source-badge {
@@ -189,22 +230,22 @@ def render_sources(metadatas):
 
 def get_suggestion_pool():
     return [
-        ("Cursos ESCE", "Que cursos existem na ESCE?"),
-        ("Cursos ESTG", "Que cursos existem na ESTG?"),
-        ("Cursos Valença", "Que cursos existem em Valença?"),
-        ("Cursos Viana", "Que cursos existem em Viana do Castelo?"),
-        ("Mestrados ESTG", "Que mestrados existem na ESTG?"),
-        ("Mestrados IPVC", "Que mestrados existem no IPVC?"),
-        ("CTeSP Valença", "Que CTeSP existem em Valença?"),
-        ("CTeSP ESTG", "Que CTeSP existem na ESTG?"),
-        ("Pós-grad. ESS", "Que pós-graduações existem na ESS?"),
-        ("Lic. Viana", "Que licenciaturas existem em Viana do Castelo?"),
-        ("Programação", "Gosto de programação, que curso recomendas?"),
-        ("Animais", "Gosto de animais, que cursos aconselhas?"),
-        ("Saúde", "Quero trabalhar na área da saúde, que cursos aconselhas?"),
-        ("Gestão", "Gosto de gestão e empresas, que curso devo escolher?"),
-        ("Jogos Digitais", "Tenho interesse em jogos digitais, que curso recomendas?"),
-        ("Desporto", "Gosto de desporto, que cursos existem para mim?")
+        ("Ver cursos da ESCE", "Que cursos existem na ESCE?"),
+        ("Ver cursos da ESTG", "Que cursos existem na ESTG?"),
+        ("Ver cursos em Valença", "Que cursos existem em Valença?"),
+        ("Ver cursos em Viana do Castelo", "Que cursos existem em Viana do Castelo?"),
+        ("Ver mestrados da ESTG", "Que mestrados existem na ESTG?"),
+        ("Ver mestrados do IPVC", "Que mestrados existem no IPVC?"),
+        ("Ver CTeSP em Valença", "Que CTeSP existem em Valença?"),
+        ("Ver CTeSP da ESTG", "Que CTeSP existem na ESTG?"),
+        ("Ver pós-graduações da ESS", "Que pós-graduações existem na ESS?"),
+        ("Ver licenciaturas em Viana", "Que licenciaturas existem em Viana do Castelo?"),
+        ("Quero um curso de programação", "Gosto de programação, que curso recomendas?"),
+        ("Quero um curso ligado a animais", "Gosto de animais, que cursos aconselhas?"),
+        ("Quero um curso na área da saúde", "Quero trabalhar na área da saúde, que cursos aconselhas?"),
+        ("Quero um curso de gestão", "Gosto de gestão e empresas, que curso devo escolher?"),
+        ("Quero um curso de jogos digitais", "Tenho interesse em jogos digitais, que curso recomendas?"),
+        ("Quero um curso ligado ao desporto", "Gosto de desporto, que cursos existem para mim?")
     ]
 
 
@@ -213,28 +254,30 @@ def refresh_quick_suggestions():
     st.session_state["quick_suggestions"] = random.sample(pool, k=4)
 
 
-def render_quick_questions():
+def render_quick_questions_vertical():
     if not st.session_state["quick_suggestions"]:
         refresh_quick_suggestions()
 
-    st.markdown(
-        '<p style="font-weight:700; color:#475569; margin-top:1rem; margin-bottom:0.75rem;">Sugestões rápidas:</p>',
-        unsafe_allow_html=True
-    )
+    st.markdown("""
+    <div class="suggestions-box">
+        <div class="suggestions-title">Perguntas de exemplo</div>
+        <div class="suggestions-subtitle">
+            Estas sugestões referem-se a cursos, CTeSP, licenciaturas, mestrados e recomendações do IPVC.
+            Clica numa opção para fazer a pergunta automaticamente.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div style="height: 0.75rem;"></div>', unsafe_allow_html=True)
 
     suggestions = st.session_state["quick_suggestions"]
 
-    cols = st.columns(4, gap="medium")
-
     for idx, (label, question) in enumerate(suggestions):
-        with cols[idx]:
-            if st.button(label, key=f"quick_{idx}_{label}", use_container_width=True):
-                st.session_state["current_question"] = question
-                st.session_state["auto_submit_question"] = True
-                refresh_quick_suggestions()
-                st.rerun()
-
-    st.markdown('<div style="height: 2.75rem;"></div>', unsafe_allow_html=True)
+        if st.button(label, key=f"quick_{idx}_{label}", use_container_width=True):
+            st.session_state["current_question"] = question
+            st.session_state["auto_submit_question"] = True
+            refresh_quick_suggestions()
+            st.rerun()
 
 
 def render_home():
@@ -286,12 +329,7 @@ def render_home():
 
 
 def render_chat():
-    st.markdown(
-        '<p style="color:#0054A4; font-weight:700; cursor:pointer;" onclick="window.location.reload()">← VOLTAR AO INÍCIO</p>',
-        unsafe_allow_html=True
-    )
-
-    if st.button("Voltar"):
+    if st.button("← Voltar"):
         st.session_state["quick_suggestions"] = []
         go_to_page("home")
 
@@ -300,67 +338,79 @@ def render_chat():
         st.session_state["reset_current_question"] = False
         st.session_state["auto_submit_question"] = False
 
-    st.markdown('<h1 style="font-weight:800;">Assistente Digital</h1>', unsafe_allow_html=True)
-
-    render_quick_questions()
-    
-    question = st.text_input(
-        "Pergunta",
-        placeholder="Escreve aqui a tua pergunta sobre o IPVC...",
-        label_visibility="collapsed",
-        key="current_question"
+    chat_col, spacer_col, suggestions_col, right_space = st.columns(
+        [2.0, 0.15, 0.85, 0.35],
+        gap="large"
     )
-    
-    col_send, col_clear, _ = st.columns([1, 1, 3])
 
-    with col_send:
-        ask_clicked = st.button("Enviar Pergunta", use_container_width=True)
+    # Renderizar primeiro as sugestões para evitar erro ao alterar current_question
+    # antes do st.text_input ser criado.
+    with suggestions_col:
+        render_quick_questions_vertical()
 
-    with col_clear:
-        if st.button("Limpar Chat", use_container_width=True):
-            st.session_state["last_question"] = ""
-            st.session_state["last_answer"] = ""
-            st.session_state["last_metadatas"] = []
-            st.session_state["last_context_chunks"] = []
-            st.session_state["auto_submit_question"] = False
-            st.session_state["reset_current_question"] = True
-            st.rerun()
+    with chat_col:
+        st.markdown(
+            '<h1 style="font-weight:800; margin-bottom:1.5rem;">Assistente Digital</h1>',
+            unsafe_allow_html=True
+        )
 
-    auto_submit = st.session_state.get("auto_submit_question", False)
-
-    if (ask_clicked or auto_submit) and question:
-        st.session_state["auto_submit_question"] = False
-
-        with st.status("🔍 A consultar documentos ...", expanded=True) as status:
-            try:
-                answer, metadatas, context_chunks = ask_bot(question)
-
-                st.session_state["last_question"] = question
-                st.session_state["last_answer"] = answer
-                st.session_state["last_metadatas"] = metadatas
-                st.session_state["last_context_chunks"] = context_chunks
-
-                status.update(label="Resposta gerada!", state="complete", expanded=False)
-
-            except Exception as e:
-                st.error(f"Erro na ligação ao modelo: {e}")
-
-    if st.session_state["last_answer"]:
-        answer_html = st.session_state["last_answer"].replace("\n", "<br>")
-
-        st.markdown(f"""
-        <div class="bot-bubble">
-            <div style="font-weight:800; color:#0054A4; margin-bottom:1rem; display:flex; align-items:center;">
-                <span style="margin-right:10px;">🎓</span> RESPOSTA
-            </div>
-            <div style="line-height:1.9; color:#334155;">
-                {answer_html}
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        question = st.text_input(
+            "Pergunta",
+            placeholder="Escreve aqui a tua pergunta sobre o IPVC...",
+            label_visibility="collapsed",
+            key="current_question"
+        )
         
-        if st.session_state["last_metadatas"]:
-            render_sources(st.session_state["last_metadatas"])
+        col_send, col_clear, _ = st.columns([1, 1, 2])
+
+        with col_send:
+            ask_clicked = st.button("Enviar Pergunta", use_container_width=True)
+
+        with col_clear:
+            if st.button("Limpar Chat", use_container_width=True):
+                st.session_state["last_question"] = ""
+                st.session_state["last_answer"] = ""
+                st.session_state["last_metadatas"] = []
+                st.session_state["last_context_chunks"] = []
+                st.session_state["auto_submit_question"] = False
+                st.session_state["reset_current_question"] = True
+                st.rerun()
+
+        auto_submit = st.session_state.get("auto_submit_question", False)
+
+        if (ask_clicked or auto_submit) and question:
+            st.session_state["auto_submit_question"] = False
+
+            with st.status("A consultar documentos ...", expanded=True) as status:
+                try:
+                    answer, metadatas, context_chunks = ask_bot(question)
+
+                    st.session_state["last_question"] = question
+                    st.session_state["last_answer"] = answer
+                    st.session_state["last_metadatas"] = metadatas
+                    st.session_state["last_context_chunks"] = context_chunks
+
+                    status.update(label="Resposta gerada!", state="complete", expanded=False)
+
+                except Exception as e:
+                    st.error(f"Erro na ligação ao modelo: {e}")
+
+        if st.session_state["last_answer"]:
+            safe_answer = html.escape(st.session_state["last_answer"]).replace("\n", "<br>")
+
+            st.markdown(f"""
+            <div class="bot-bubble">
+                <div class="bubble-title">
+                    <span>🎓</span> RESPOSTA
+                </div>
+                <div style="line-height:1.9; color:#334155;">
+                    {safe_answer}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.session_state["last_metadatas"]:
+                render_sources(st.session_state["last_metadatas"])
 
 
 def render_about():
