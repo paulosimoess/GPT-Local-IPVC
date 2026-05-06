@@ -57,12 +57,14 @@ def course_to_text(course: Dict) -> str:
         "Regime: {5}\n"
         "Local: {6}\n"
         "Área: {7}\n"
-        "Saídas profissionais: {8}\n"
-        "Descrição: {9}\n"
-        "Resumo: {10}\n"
-        "Interesses relacionados: {11}\n"
-        "Palavras-chave: {12}\n"
-        "Fonte: {13}"
+        "Estado: {8}\n"
+        "Observações: {9}\n"
+        "Saídas profissionais: {10}\n"
+        "Descrição: {11}\n"
+        "Resumo: {12}\n"
+        "Interesses relacionados: {13}\n"
+        "Palavras-chave: {14}\n"
+        "Fonte: {15}"
     ).format(
         course.get("curso", ""),
         course.get("escola", ""),
@@ -72,6 +74,8 @@ def course_to_text(course: Dict) -> str:
         course.get("regime", ""),
         course.get("local", ""),
         course.get("area", ""),
+        course.get("estado", ""),
+        course.get("observacoes", ""),
         course.get("saidas_profissionais", ""),
         course.get("descricao", ""),
         course.get("resumo", ""),
@@ -79,7 +83,6 @@ def course_to_text(course: Dict) -> str:
         course.get("palavras_chave", ""),
         course.get("fonte", "")
     )
-
 
 def school_to_text(school: Dict) -> str:
     return (
@@ -113,7 +116,16 @@ def build_documents() -> List[Dict]:
                 "curso": course.get("curso", ""),
                 "escola": course.get("escola", ""),
                 "grau": course.get("grau", ""),
-                "area": course.get("area", "")
+                "area": course.get("area", ""),
+                "local": course.get("local", ""),
+                "regime": course.get("regime", ""),
+                "estado": course.get("estado", ""),
+                "observacoes": course.get("observacoes", ""),
+                "descricao": course.get("descricao", ""),
+                "resumo": course.get("resumo", ""),
+                "interesses_relacionados": course.get("interesses_relacionados", ""),
+                "palavras_chave": course.get("palavras_chave", ""),
+                "saidas_profissionais": course.get("saidas_profissionais", "")
             }
         })
 
