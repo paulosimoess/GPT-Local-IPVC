@@ -39,7 +39,8 @@ Que licenciaturas existem em Viana do Castelo?
 Gosto de programação, que curso recomendas?
 Gosto de animais, que cursos aconselhas?
 Quero trabalhar na área da saúde, que cursos aconselhas?
+```
 
 ## Autores
 - Paulo Simões, Nº 31377
-- Francisco Matos, Nº 31406
+- Francisco Matos, Nº 31
