@@ -97,6 +97,39 @@ def school_to_text(school: Dict) -> str:
         school.get("descricao", "")
     )
 
+def admission_to_text(admission: Dict) -> str:
+    return (
+        "Curso: {0}\n"
+        "Escola: {1}\n"
+        "Código da instituição: {2}\n"
+        "Código do curso: {3}\n"
+        "Grau: {4}\n"
+        "Ano: {5}\n"
+        "Fase: {6}\n"
+        "Vagas iniciais: {7}\n"
+        "Colocados: {8}\n"
+        "Nota do último colocado pelo contingente geral: {9}\n"
+        "Sobras para a 2.ª fase: {10}\n"
+        "Fonte: {11}\n"
+        "Tipo de dado: {12}\n"
+        "Observações: {13}"
+    ).format(
+        admission.get("curso", ""),
+        admission.get("escola", ""),
+        admission.get("codigo_instituicao", ""),
+        admission.get("codigo_curso", ""),
+        admission.get("grau", ""),
+        admission.get("ano", ""),
+        admission.get("fase", ""),
+        admission.get("vagas_iniciais", ""),
+        admission.get("colocados", ""),
+        admission.get("nota_ultimo_colocado_contingente_geral", ""),
+        admission.get("sobras_2_fase", ""),
+        admission.get("fonte", ""),
+        admission.get("tipo_dado", ""),
+        admission.get("observacoes", "")
+    )
+
 
 def build_documents() -> List[Dict]:
     documents = []
@@ -146,6 +179,39 @@ def build_documents() -> List[Dict]:
                 "local": school.get("local", "")
             }
         })
+
+        # Médias de acesso / DGES
+    admissions_path = Path("data/estruturados/medias_ipvc.csv")
+
+    if admissions_path.exists():
+        admissions = load_generic_csv(admissions_path)
+
+        for idx, admission in enumerate(admissions):
+            text = admission_to_text(admission)
+
+            documents.append({
+                "id": "admission_{0}".format(idx),
+                "text": text,
+                "metadata": {
+                    "type": "structured_admission",
+                    "source": admission.get("fonte", ""),
+                    "curso": admission.get("curso", ""),
+                    "escola": admission.get("escola", ""),
+                    "codigo_instituicao": admission.get("codigo_instituicao", ""),
+                    "codigo_curso": admission.get("codigo_curso", ""),
+                    "grau": admission.get("grau", ""),
+                    "ano": admission.get("ano", ""),
+                    "fase": admission.get("fase", ""),
+                    "vagas_iniciais": admission.get("vagas_iniciais", ""),
+                    "colocados": admission.get("colocados", ""),
+                    "nota_ultimo_colocado_contingente_geral": admission.get("nota_ultimo_colocado_contingente_geral", ""),
+                    "sobras_2_fase": admission.get("sobras_2_fase", ""),
+                    "tipo_dado": admission.get("tipo_dado", ""),
+                    "observacoes": admission.get("observacoes", "")
+                }
+            })
+    else:
+        print("Aviso: medias_ipvc.csv não encontrado. A base será criada sem dados de médias.")    
 
     # PDFs
     pdfs_path = Path("data/nao_estruturados")

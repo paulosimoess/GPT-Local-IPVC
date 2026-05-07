@@ -1,0 +1,29 @@
+curso,escola,codigo_instituicao,codigo_curso,grau,ano,fase,vagas_iniciais,colocados,nota_ultimo_colocado_contingente_geral,sobras_2_fase,fonte,tipo_dado,observacoes
+Agronomia,ESA,3161,9003,Licenciatura,2025,1.ª fase CNA,20,2,,18,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,Nota não indicada no PDF de resultados; curso com vagas sobrantes.
+Biotecnologia,ESA,3161,9016,Licenciatura,2025,1.ª fase CNA,27,6,134.5,21,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Enfermagem Veterinária,ESA,3161,9085,Licenciatura,2025,1.ª fase CNA,35,21,126.8,13,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Engenharia do Ambiente e Geoinformática,ESA,3161,L164,Licenciatura,2025,1.ª fase CNA,20,0,,20,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,Sem colocados na 1.ª fase; nota não aplicável no PDF.
+Gerontologia,ESE,3162,9833,Licenciatura,2025,1.ª fase CNA,30,10,118.8,20,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Educação Básica,ESE,3162,9853,Licenciatura,2025,1.ª fase CNA,71,71,141.5,0,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Artes Plásticas e Tecnologias Artísticas,ESE,3162,L122,Licenciatura,2025,1.ª fase CNA,30,30,138.0,0,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Artes e Cinema Digital,ESE,3162,L284,Licenciatura,2025,1.ª fase CNA,20,20,138.3,0,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Engenharia da Computação Gráfica e Multimédia,ESTG,3163,8407,Licenciatura,2025,1.ª fase CNA,43,7,136.3,36,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Engenharia Informática,ESTG,3163,9119,Licenciatura,2025,1.ª fase CNA,81,60,117.3,21,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Engenharia Mecânica,ESTG,3163,9123,Licenciatura,2025,1.ª fase CNA,36,21,116.8,15,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Gestão,ESTG,3163,9147,Licenciatura,2025,1.ª fase CNA,48,48,144.8,0,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Gestão (regime noturno),ESTG,3163,9148,Licenciatura,2025,1.ª fase CNA,33,11,144.8,21,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Turismo,ESTG,3163,9254,Licenciatura,2025,1.ª fase CNA,55,28,122.8,27,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Design de Ambientes,ESTG,3163,9723,Licenciatura,2025,1.ª fase CNA,28,28,148.5,0,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Design do Produto,ESTG,3163,9727,Licenciatura,2025,1.ª fase CNA,40,35,129.5,5,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Engenharia Civil e do Ambiente,ESTG,3163,9743,Licenciatura,2025,1.ª fase CNA,32,7,123.0,25,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Engenharia Mecatrónica,ESTG,3163,9751,Licenciatura,2025,1.ª fase CNA,33,1,,32,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,Nota não indicada no PDF de resultados; curso com apenas 1 colocado na 1.ª fase.
+Engenharia de Redes e Sistemas de Computadores,ESTG,3163,L153,Licenciatura,2025,1.ª fase CNA,45,1,,44,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,Nota não indicada no PDF de resultados; curso com apenas 1 colocado na 1.ª fase.
+Gastronomia e Artes Culinárias,ESTG,3163,L261,Licenciatura,2025,1.ª fase CNA,20,3,138.0,17,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Tecnologia Alimentar e Nutrição,ESTG,3163,L362,Licenciatura,2025,1.ª fase CNA,20,8,135.0,12,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Gestão da Distribuição e Logística,ESCE,3164,8464,Licenciatura,2025,1.ª fase CNA,30,4,126.8,26,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Organização e Gestão Empresariais,ESCE,3164,8516,Licenciatura,2025,1.ª fase CNA,31,14,124.8,17,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Contabilidade e Fiscalidade,ESCE,3164,9498,Licenciatura,2025,1.ª fase CNA,35,4,,31,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,Nota não indicada no PDF de resultados; curso com vagas sobrantes.
+Marketing e Comunicação Empresariais,ESCE,3164,L366,Licenciatura,2025,1.ª fase CNA,45,27,115.0,18,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Desporto e Lazer,ESDL,3165,9731,Licenciatura,2025,1.ª fase CNA,71,30,122.0,40,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Animação Desportiva e Turismo Ativo,ESDL,3165,L375,Licenciatura,2025,1.ª fase CNA,30,1,141.0,29,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
+Enfermagem,ESS,7075,9500,Licenciatura,2025,1.ª fase CNA,70,70,148.8,0,https://dges.gov.pt/coloc/2025/cna25_1f_resultados.pdf,Nota do último colocado pelo contingente geral,
