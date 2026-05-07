@@ -284,7 +284,7 @@ def render_home():
     st.markdown(
         '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3rem;">'
         '<span style="font-weight: 800; color: #0054A4; font-size: 1.5rem;">IPVC.genius</span>'
-        '<span style="color: #64748b;">Trabalho Académico 2026</span></div>',
+        '<span style="color: #64748b;">CP2B AOOP 2026</span></div>',
         unsafe_allow_html=True
     )
 
@@ -360,6 +360,13 @@ def render_chat():
             label_visibility="collapsed",
             key="current_question"
         )
+
+        st.markdown(
+            '<p style="font-size:0.9rem; color:#64748b; margin-top:0.4rem; margin-bottom:1rem;">'
+            'As respostas são geradas com base nos ficheiros locais carregados no sistema.'
+            '</p>',
+            unsafe_allow_html=True
+        )
         
         col_send, col_clear, _ = st.columns([1, 1, 2])
 
@@ -378,7 +385,10 @@ def render_chat():
 
         auto_submit = st.session_state.get("auto_submit_question", False)
 
-        if (ask_clicked or auto_submit) and question:
+        if ask_clicked and not question.strip():
+            st.warning("Escreve uma pergunta antes de enviar.")
+
+        if (ask_clicked or auto_submit) and question.strip():
             st.session_state["auto_submit_question"] = False
 
             with st.status("A consultar documentos ...", expanded=True) as status:
@@ -417,19 +427,85 @@ def render_about():
     if st.button("← Voltar"):
         go_to_page("home")
 
-    st.markdown('<h1 style="font-weight:800;">Como funciona?</h1>', unsafe_allow_html=True)
-    
+    st.markdown(
+        '<h1 style="font-weight:800;">Arquitetura do Sistema</h1>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        '<p style="font-size:1.05rem; color:#475569; margin-bottom:2rem;">'
+        'Esta aplicação utiliza uma abordagem RAG, combinando dados estruturados e não estruturados '
+        'para responder a perguntas sobre cursos e formações do IPVC.'
+        '</p>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        '<div style="background:white; border:1px solid #e2e8f0; border-radius:28px; '
+        'padding:2rem; box-shadow:0 15px 35px -18px rgba(15,23,42,0.25); margin-bottom:2rem;">'
+        '<h3 style="color:#0054A4; margin-top:0;">Fluxo RAG da aplicação</h3>'
+
+        '<div style="font-size:1rem; line-height:2; color:#334155;">'
+
+        '<strong>1. Dados locais</strong><br>'
+        'CSVs com cursos, escolas, graus de ensino, localizações e áreas + PDFs/brochuras do IPVC'
+        '<br><br>'
+
+        '<strong>2. Pré-processamento</strong><br>'
+        'Os dados são carregados, limpos e transformados em blocos de texto pesquisáveis'
+        '<br><br>'
+
+        '<strong>3. Embeddings</strong><br>'
+        'Cada bloco é convertido num vetor usando SentenceTransformers'
+        '<br><br>'
+
+        '<strong>4. Base vetorial ChromaDB</strong><br>'
+        'Os vetores e metadados são guardados localmente numa coleção chamada <code>ipvc_courses</code>'
+        '<br><br>'
+
+        '<strong>5. Pesquisa de contexto</strong><br>'
+        'Quando o utilizador faz uma pergunta, o sistema procura os blocos mais relevantes'
+        '<br><br>'
+
+        '<strong>6. Modelo local Llama3 via Ollama</strong><br>'
+        'O contexto recuperado é enviado para o modelo, que gera uma resposta em linguagem natural'
+        '<br><br>'
+
+        '<strong>7. Resposta final</strong><br>'
+        'A resposta é apresentada ao utilizador juntamente com as fontes consultadas'
+
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
     col1, col2 = st.columns(2)
 
     with col1:
-        st.info("**RAG (Retrieval-Augmented Generation)**: O sistema não inventa. Ele lê os teus PDFs e CSVs primeiro.")
+        st.info(
+            "**Dados estruturados**\n\n"
+            "- cursos_ipvc.csv\n"
+            "- escolas_ipvc.csv\n"
+            "- Metadados: curso, escola, grau, local, regime, área, estado e fonte"
+        )
 
     with col2:
-        st.success("**Privacidade Local**: O Llama3 corre no teu PC via Ollama. Nenhum dado sai do IPVC.")
-    
-    st.image(
-        "https://miro.medium.com/v2/resize:fit:1400/1*v6S_S_vsh_x-GfJ_v7Vf6w.png",
-        caption="Esquema do fluxo RAG"
+        st.success(
+            "**Dados não estruturados**\n\n"
+            "- PDFs e brochuras do IPVC\n"
+            "- Texto extraído e dividido em blocos\n"
+            "- Pesquisa semântica através da ChromaDB"
+        )
+
+    st.markdown(
+        '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:22px; '
+        'padding:1.5rem; margin-top:1.5rem;">'
+        '<h4 style="color:#0054A4; margin-top:0;">Tecnologias utilizadas</h4>'
+        '<p style="color:#334155; line-height:1.8; margin-bottom:0;">'
+        'Python · Streamlit · ChromaDB · SentenceTransformers · Ollama · Llama3 · Pandas · PyPDF'
+        '</p>'
+        '</div>',
+        unsafe_allow_html=True
     )
 
 
