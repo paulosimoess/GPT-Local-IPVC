@@ -97,6 +97,32 @@ def detect_degree(question: str) -> Optional[str]:
     return None
 
 
+def detect_phase(question: str) -> Optional[str]:
+    question_norm = normalize_text(question)
+
+    first_phase_patterns = [
+        r"\b1\s*\.?\s*[ªa]?\s*fase\b",
+        r"\bprimeira fase\b",
+        r"\b1 fase\b"
+    ]
+
+    second_phase_patterns = [
+        r"\b2\s*\.?\s*[ªa]?\s*fase\b",
+        r"\bsegunda fase\b",
+        r"\b2 fase\b"
+    ]
+
+    for pattern in first_phase_patterns:
+        if re.search(pattern, question_norm):
+            return "1.ª fase CNA"
+
+    for pattern in second_phase_patterns:
+        if re.search(pattern, question_norm):
+            return "2.ª fase CNA"
+
+    return None
+
+
 def is_recommendation_question(question: str) -> bool:
     question_norm = normalize_text(question)
 
@@ -436,6 +462,310 @@ def is_out_of_scope_question(question: str) -> bool:
     return False
 
 
+def is_admission_question(question: str) -> bool:
+    question_norm = normalize_text(question)
+
+    keywords = [
+        "media",
+        "medias",
+        "nota",
+        "notas",
+        "ultimo colocado",
+        "ultima colocada",
+        "ultimo colocados",
+        "vagas",
+        "colocados",
+        "candidatura",
+        "acesso",
+        "dges",
+        "sobras",
+        "1 fase",
+        "1.ª fase",
+        "primeira fase",
+        "2 fase",
+        "2.ª fase",
+        "segunda fase",
+        "provas de ingresso"
+    ]
+
+    return any(keyword in question_norm for keyword in keywords)
+
+
+def get_all_admission_documents() -> Tuple[List[str], List[dict]]:
+    collection = get_collection()
+    results = collection.get(where={"type": "structured_admission"})
+    return results.get("documents", []), results.get("metadatas", [])
+
+
+def parse_number(value) -> Optional[float]:
+    if value is None:
+        return None
+
+    value_str = str(value).strip().replace(",", ".")
+
+    if not value_str:
+        return None
+
+    try:
+        return float(value_str)
+    except ValueError:
+        return None
+
+
+def normalize_grade_to_200(value: float) -> float:
+    if value <= 20:
+        return value * 10
+
+    return value
+
+
+def format_grade(value) -> str:
+    number = parse_number(value)
+
+    if number is None:
+        return "não disponível"
+
+    if number > 20:
+        return f"{number:.1f} valores (equivalente a {number / 10:.2f}/20)"
+
+    return f"{number:.2f}/20"
+
+
+def detect_average_threshold(question: str) -> Optional[float]:
+    question_norm = normalize_text(question)
+
+    patterns = [
+        r"(?:abaixo|inferior|menor|ate|até)\s+(?:de|a)?\s*(\d+(?:[.,]\d+)?)",
+        r"tenho\s+(?:media|nota)\s+(?:de)?\s*(\d+(?:[.,]\d+)?)",
+        r"com\s+(?:media|nota)\s+(?:de)?\s*(\d+(?:[.,]\d+)?)",
+        r"(?:media|nota)\s+(?:abaixo|inferior|menor|ate|até)\s+(?:de|a)?\s*(\d+(?:[.,]\d+)?)"
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, question_norm)
+
+        if match:
+            number = parse_number(match.group(1))
+
+            if number is not None:
+                return normalize_grade_to_200(number)
+
+    return None
+
+
+def get_meaningful_words(text: str) -> set:
+    text_norm = normalize_text(text)
+
+    stopwords = {
+        "de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os",
+        "curso", "cursos", "licenciatura", "mestrado", "ctesp", "ipvc",
+        "media", "nota", "ultimo", "colocado", "vagas"
+    }
+
+    words = re.findall(r"\b[a-z0-9]+\b", text_norm)
+
+    return {word for word in words if word not in stopwords and len(word) > 2}
+
+
+def match_admission_courses(question: str, pairs: List[Tuple[str, dict]]) -> List[Tuple[str, dict]]:
+    question_norm = normalize_text(question)
+    question_words = get_meaningful_words(question)
+
+    scored_pairs = []
+
+    for doc, meta in pairs:
+        course = meta.get("curso", "")
+        course_norm = normalize_text(course)
+        course_words = get_meaningful_words(course)
+
+        if not course:
+            continue
+
+        if course_norm and course_norm in question_norm:
+            scored_pairs.append((100, doc, meta))
+            continue
+
+        if not course_words:
+            continue
+
+        overlap = question_words.intersection(course_words)
+
+        if len(course_words) == 1:
+            score = len(overlap)
+        else:
+            score = len(overlap) / len(course_words)
+
+        if len(overlap) >= 2 or score >= 0.6:
+            scored_pairs.append((score, doc, meta))
+
+    scored_pairs = sorted(scored_pairs, key=lambda item: item[0], reverse=True)
+
+    if not scored_pairs:
+        return []
+
+    best_score = scored_pairs[0][0]
+
+    return [
+        (doc, meta)
+        for score, doc, meta in scored_pairs
+        if score == best_score or score >= 0.6
+    ]
+
+
+def filter_admission_pairs(question: str, pairs: List[Tuple[str, dict]]) -> List[Tuple[str, dict]]:
+    school_code = detect_school_code(question)
+    degree = detect_degree(question)
+    phase = detect_phase(question)
+
+    filtered = []
+
+    for doc, meta in pairs:
+        meta_school = meta.get("escola", "")
+        meta_degree = meta.get("grau", "")
+        meta_phase = meta.get("fase", "")
+
+        if school_code and normalize_text(meta_school) != normalize_text(school_code):
+            continue
+
+        if degree and normalize_text(meta_degree) != normalize_text(degree):
+            continue
+
+        if phase and normalize_text(phase) != normalize_text(meta_phase):
+            continue
+
+        filtered.append((doc, meta))
+
+    return filtered
+
+
+def build_admission_line(meta: dict) -> str:
+    curso = meta.get("curso", "")
+    escola = meta.get("escola", "")
+    ano = meta.get("ano", "")
+    fase = meta.get("fase", "")
+    vagas = meta.get("vagas_iniciais", "")
+    colocados = meta.get("colocados", "")
+    nota = meta.get("nota_ultimo_colocado_contingente_geral", "")
+    sobras = meta.get("sobras_2_fase", "")
+
+    header_details = []
+
+    if escola:
+        header_details.append(escola)
+
+    if ano:
+        header_details.append(str(ano))
+
+    if fase:
+        header_details.append(str(fase))
+
+    if header_details:
+        line = f"- {curso} ({', '.join(header_details)})"
+    else:
+        line = f"- {curso}"
+
+    line += f"\n  • Nota do último colocado: {format_grade(nota)}"
+
+    if vagas != "":
+        line += f"\n  • Vagas iniciais: {vagas}"
+
+    if colocados != "":
+        line += f"\n  • Colocados: {colocados}"
+
+    if sobras != "":
+        line += f"\n  • Sobras para a 2.ª fase: {sobras}"
+
+    return line
+
+
+def answer_admission_question(question: str) -> Tuple[str, List[dict], List[str]]:
+    question_norm = normalize_text(question)
+    phase = detect_phase(question)
+
+    if "provas de ingresso" in question_norm or "provas ingresso" in question_norm:
+        return FALLBACK_ANSWER, [], []
+
+    documents, metadatas = get_all_admission_documents()
+    pairs = list(zip(documents, metadatas))
+
+    if not pairs:
+        return FALLBACK_ANSWER, [], []
+
+    pairs = filter_admission_pairs(question, pairs)
+
+    if not pairs:
+        return FALLBACK_ANSWER, [], []
+
+    threshold = detect_average_threshold(question)
+
+    if threshold is not None:
+        valid_pairs = []
+
+        for doc, meta in pairs:
+            grade = parse_number(meta.get("nota_ultimo_colocado_contingente_geral", ""))
+
+            if grade is None:
+                continue
+
+            grade_200 = normalize_grade_to_200(grade)
+
+            if grade_200 <= threshold:
+                valid_pairs.append((doc, meta, grade_200))
+
+        valid_pairs = sorted(valid_pairs, key=lambda item: item[2], reverse=True)
+
+        if not valid_pairs:
+            return FALLBACK_ANSWER, [], []
+
+        selected = valid_pairs[:12]
+
+        if phase:
+            phase_text = phase
+        else:
+            phase_text = "nas fases disponíveis do CNA 2025"
+
+        lines = [
+            f"Com uma média até {threshold / 10:.2f}/20, encontrei estes cursos do IPVC com nota do último colocado igual ou inferior {phase_text}:"
+        ]
+
+        for doc, meta, _ in selected:
+            lines.append(build_admission_line(meta))
+
+        selected_docs = [doc for doc, _, _ in selected]
+        selected_metas = [meta for _, meta, _ in selected]
+
+        return "\n".join(lines), selected_metas, selected_docs
+
+    matched_pairs = match_admission_courses(question, pairs)
+
+    if matched_pairs:
+        lines = ["Encontrei os seguintes dados de acesso:"]
+
+        for doc, meta in matched_pairs[:6]:
+            lines.append(build_admission_line(meta))
+
+        selected_docs = [doc for doc, _ in matched_pairs[:6]]
+        selected_metas = [meta for _, meta in matched_pairs[:6]]
+
+        return "\n".join(lines), selected_metas, selected_docs
+
+    school_code = detect_school_code(question)
+    degree = detect_degree(question)
+
+    if school_code or degree:
+        lines = ["Encontrei os seguintes dados de acesso:"]
+
+        for doc, meta in pairs[:15]:
+            lines.append(build_admission_line(meta))
+
+        selected_docs = [doc for doc, _ in pairs[:15]]
+        selected_metas = [meta for _, meta in pairs[:15]]
+
+        return "\n".join(lines), selected_metas, selected_docs
+
+    return FALLBACK_ANSWER, [], []
+
+
 def search_relevant_context(question: str, n_results: int = 6) -> Tuple[List[str], List[dict]]:
     if is_school_question(question):
         location = detect_location(question)
@@ -580,6 +910,9 @@ Resposta:
 def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
     if is_out_of_scope_question(question):
         return FALLBACK_ANSWER, [], []
+
+    if is_admission_question(question):
+        return answer_admission_question(question)
     
     if is_recommendation_question(question):
         context_chunks, metadatas = get_recommended_courses(question)

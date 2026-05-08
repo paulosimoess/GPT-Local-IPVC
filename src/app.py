@@ -188,6 +188,9 @@ def format_source_name(source: str) -> str:
     if source_lower.endswith(".pdf"):
         return source
 
+    if "dges" in source_lower:
+        return "Documento oficial da DGES - CNA 2025"
+
     if source.startswith("http"):
         return "Página oficial do IPVC"
 
