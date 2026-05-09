@@ -200,19 +200,77 @@ def format_source_name(source: str) -> str:
 def get_unique_sources(metadatas):
     sources = []
 
+    def add_source(label, url=None):
+        item = (label, url)
+        if label and item not in sources:
+            sources.append(item)
+
     for meta in metadatas:
+        meta_type = meta.get("type", "")
         source = meta.get("source", "")
 
-        if not source:
+        source_str = str(source).strip()
+        source_lower = source_str.lower()
+
+        # Médias / DGES
+        if meta_type == "structured_admission":
+            add_source("CSV local: medias_ipvc.csv")
+
+            if "cna25_1f" in source_lower or "1f_resultados" in source_lower:
+                add_source("Fonte original dos dados: Documento oficial da DGES - CNA 2025 - 1.ª fase")
+            elif "cna25_2f" in source_lower or "2f_resultados" in source_lower:
+                add_source("Fonte original dos dados: Documento oficial da DGES - CNA 2025 - 2.ª fase")
+            elif "dges" in source_lower:
+                add_source("Fonte original dos dados: Documento oficial da DGES - CNA 2025")
+
             continue
 
-        label = format_source_name(source)
-        url = source if str(source).startswith("http") else None
+        # Cursos estruturados
+        if meta_type == "structured_course":
+            add_source("CSV local: cursos_ipvc.csv")
 
-        item = (label, url)
+            if source_str:
+                label = format_source_name(source_str)
 
-        if item not in sources:
-            sources.append(item)
+                if source_str.startswith("http"):
+                    add_source(f"Fonte original dos dados: {label}", source_str)
+                else:
+                    add_source(f"Fonte original dos dados: {label}")
+
+            continue
+
+        # Escolas estruturadas
+        if meta_type == "structured_school":
+            add_source("CSV local: escolas_ipvc.csv")
+
+            if source_str and source_str != "escolas_ipvc.csv":
+                label = format_source_name(source_str)
+
+                if source_str.startswith("http"):
+                    add_source(f"Fonte original dos dados: {label}", source_str)
+                else:
+                    add_source(f"Fonte original dos dados: {label}")
+
+            continue
+
+        # PDFs locais
+        if meta_type == "pdf_chunk":
+            if source_str:
+                add_source(f"PDF local: {source_str}")
+            else:
+                add_source("PDF local: Documento local")
+
+            continue
+
+        if source_str:
+            label = format_source_name(source_str)
+
+            if "dges" in source_lower or "cna25" in source_lower:
+                add_source(label)
+            elif source_str.startswith("http"):
+                add_source(label, source_str)
+            else:
+                add_source(label)
 
     return sources
 
@@ -346,8 +404,6 @@ def render_chat():
         gap="large"
     )
 
-    # Renderizar primeiro as sugestões para evitar erro ao alterar current_question
-    # antes do st.text_input ser criado.
     with suggestions_col:
         render_quick_questions_vertical()
 
