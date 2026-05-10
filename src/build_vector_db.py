@@ -189,7 +189,7 @@ def build_documents() -> List[Dict]:
             }
         })
 
-        # Médias de acesso / DGES
+    # Médias de acesso / DGES
     admissions_path = Path("data/estruturados/medias_ipvc.csv")
 
     if admissions_path.exists():

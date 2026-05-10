@@ -212,7 +212,6 @@ def get_unique_sources(metadatas):
         source_str = str(source).strip()
         source_lower = source_str.lower()
 
-        # Médias / DGES
         if meta_type == "structured_admission":
             add_source("CSV local: medias_ipvc.csv")
 
@@ -225,9 +224,19 @@ def get_unique_sources(metadatas):
 
             continue
 
-        # Cursos estruturados
         if meta_type == "structured_course":
             add_source("CSV local: cursos_ipvc.csv")
+
+            fonte_contexto = str(meta.get("_fonte_contexto", "")).strip()
+            provas_fonte = str(meta.get("provas_ingresso_fonte", "")).strip()
+
+            if fonte_contexto == "provas_ingresso" and provas_fonte:
+                if provas_fonte.startswith("http"):
+                    add_source("Fonte original das provas de ingresso: Página oficial do IPVC", provas_fonte)
+                else:
+                    add_source(f"Fonte original das provas de ingresso: {provas_fonte}")
+
+                continue
 
             if source_str:
                 label = format_source_name(source_str)
@@ -239,7 +248,6 @@ def get_unique_sources(metadatas):
 
             continue
 
-        # Escolas estruturadas
         if meta_type == "structured_school":
             add_source("CSV local: escolas_ipvc.csv")
 
@@ -253,7 +261,6 @@ def get_unique_sources(metadatas):
 
             continue
 
-        # PDFs locais
         if meta_type == "pdf_chunk":
             if source_str:
                 add_source(f"PDF local: {source_str}")
@@ -281,7 +288,7 @@ def render_sources(metadatas):
     if not sources:
         return
 
-    with st.expander("📚 Ver fontes consultadas"):
+    with st.expander("Ver fontes consultadas"):
         for label, url in sources:
             if url:
                 st.markdown(f"- [{label}]({url})")
@@ -353,13 +360,13 @@ def render_home():
 
     with col1:
         st.markdown(
-            '<div class="hero-text-huge">Dá o próximo passo na tua carreira académica.</div>',
+            '<div class="hero-text-huge">Descobre tudo sobre os cursos e formações do IPVC.</div>',
             unsafe_allow_html=True
         )
         st.markdown(
             '<p style="font-size: 1.2rem; color: #475569; margin-bottom: 2.5rem;">'
             'Consulta informações sobre cursos, pré-requisitos e escolas do Instituto Politécnico de Viana do Castelo '
-            'através do nosso motor de inteligência artificial soberano e local.</p>',
+            'através do nosso motor de inteligência artificial local.</p>',
             unsafe_allow_html=True
         )
         

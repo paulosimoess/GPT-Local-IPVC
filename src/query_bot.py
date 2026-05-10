@@ -857,8 +857,6 @@ def detect_interest_terms(question: str) -> List[str]:
         if found_exact or found_fuzzy:
             terms.extend(expansion_terms)
 
-    # Mantém algumas palavras relevantes da pergunta, mas sem deixar que erros
-    # ortográficos dominem a recomendação.
     for word in get_meaningful_words(question):
         if len(word) >= 4 and word not in terms:
             terms.append(word)
@@ -894,12 +892,9 @@ def contains_term(text: str, term: str) -> bool:
     if not text_norm or not term_norm:
         return False
 
-    # Se for expressão composta, permite pesquisa direta.
     if " " in term_norm:
         return term_norm in text_norm
 
-    # Se for uma palavra simples, obriga a corresponder à palavra inteira.
-    # Isto evita que "tecnologia" bata em "biotecnologia".
     pattern = r"(?<![a-z0-9])" + re.escape(term_norm) + r"(?![a-z0-9])"
     return re.search(pattern, text_norm) is not None
 
@@ -930,23 +925,17 @@ def score_course_for_interest(meta: dict, question: str) -> int:
         if not term:
             continue
 
-        # Maior peso se o interesse aparece diretamente no nome do curso.
-        # Ex.: "design" deve puxar "Design de Ambientes".
         if contains_term(course_name, term):
             score += 8
 
-        # Peso intermédio se aparece nos campos principais.
         elif contains_term(high_weight_text, term):
             score += 4
 
-        # Peso menor se aparece apenas na descrição/resumo.
         elif contains_term(full_text, term):
             score += 1
 
     question_norm = normalize_text(question)
 
-    # Se o utilizador não pediu grau específico, dá ligeira prioridade a licenciaturas.
-    # Evita que mestrados apareçam antes de licenciaturas em perguntas genéricas.
     requested_degree = detect_degree(question)
 
     if requested_degree:
@@ -962,7 +951,6 @@ def score_course_for_interest(meta: dict, question: str) -> int:
         elif degree in {"mestrado", "pos-graduacao", "pós-graduação"}:
             score -= 1
 
-    # Afinamentos específicos para interesses frequentes.
     if "design" in question_norm:
         if "design" in normalize_text(course_name):
             score += 8
@@ -1755,7 +1743,6 @@ def get_entry_exams_from_course_metadata(meta: Optional[dict]) -> List[str]:
     seen = set()
 
     for raw in raw_values:
-        # Divide alternativas separadas por ;, |, quebras de linha ou " ou "
         parts = re.split(r";|\n|\||\s+ou\s+", raw, flags=re.IGNORECASE)
 
         for part in parts:
@@ -1764,7 +1751,6 @@ def get_entry_exams_from_course_metadata(meta: Optional[dict]) -> List[str]:
             if not item:
                 continue
 
-            # Normaliza casos como [16] Matemática para 16 Matemática
             item = re.sub(r"^\[(\d{1,2})\]\s*", r"\1 ", item).strip()
 
             key = normalize_text(item)
@@ -1774,6 +1760,88 @@ def get_entry_exams_from_course_metadata(meta: Optional[dict]) -> List[str]:
                 exams.append(item)
 
     return exams
+
+
+def split_entry_exam_alternatives(raw_text: str) -> List[List[str]]:
+    raw_text = str(raw_text).strip()
+
+    if not raw_text:
+        return []
+
+    raw_text = re.sub(r"\s+", " ", raw_text)
+
+    alternatives = re.split(r"\s+ou\s+", raw_text, flags=re.IGNORECASE)
+
+    groups = []
+
+    for alternative in alternatives:
+        parts = re.split(r"\s*\+\s*", alternative)
+
+        exams = []
+
+        for part in parts:
+            exam = clean_exam_name(part)
+
+            if exam:
+                exams.append(exam)
+
+        if exams:
+            groups.append(exams)
+
+    unique_groups = []
+    seen = set()
+
+    for group in groups:
+        key = tuple(normalize_text(item) for item in group)
+
+        if key not in seen:
+            seen.add(key)
+            unique_groups.append(group)
+
+    return unique_groups
+
+
+def build_entry_exam_answer_lines(course_name: str, exams: List[str]) -> List[str]:
+    lines = [f"As provas de ingresso para {course_name} são:"]
+
+    if not exams:
+        return lines
+
+    raw_text = " ou ".join(str(exam).strip() for exam in exams if str(exam).strip())
+    groups = split_entry_exam_alternatives(raw_text)
+
+    if not groups:
+        for exam in exams:
+            exam = str(exam).strip()
+            if exam:
+                lines.append(f"- {exam}")
+
+        return lines
+
+    single_exam_groups = [group for group in groups if len(group) == 1]
+    combined_exam_groups = [group for group in groups if len(group) > 1]
+
+    if single_exam_groups:
+        lines.append("")
+        lines.append("Prova única / uma das seguintes:")
+
+        for group in single_exam_groups:
+            lines.append(f"- {group[0]}")
+
+    if combined_exam_groups:
+        lines.append("")
+        lines.append("Ou um dos seguintes conjuntos:")
+
+        for idx, group in enumerate(combined_exam_groups, start=1):
+            lines.append(f"Conjunto {idx}:")
+
+            for exam in group:
+                lines.append(f"- {exam}")
+
+            if idx < len(combined_exam_groups):
+                lines.append("")
+
+    return lines
 
 
 def find_best_course_match(question: str) -> Tuple[Optional[str], Optional[dict]]:
@@ -1866,23 +1934,16 @@ def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str
 
     course_name = course_meta.get("curso", "") if course_meta else ""
 
-    # 1. Primeiro tenta responder pelos metadados da ChromaDB
     metadata_exams = get_entry_exams_from_course_metadata(course_meta)
 
     if metadata_exams:
-        lines = [f"As provas de ingresso para {course_name} são:"]
+        lines = build_entry_exam_answer_lines(course_name, metadata_exams)
 
-        for exam in metadata_exams:
-            lines.append(f"- {exam}")
+        course_meta_with_context = dict(course_meta)
+        course_meta_with_context["_fonte_contexto"] = "provas_ingresso"
 
-        fonte = str(course_meta.get("provas_ingresso_fonte", "")).strip()
+        return "\n".join(lines), [course_meta_with_context], [course_doc or ""]
 
-        if fonte:
-            lines.append(f"Fonte: {fonte}")
-
-        return "\n".join(lines), [course_meta], [course_doc or ""]
-
-    # 2. Se a ChromaDB ainda não tiver as provas, tenta ler diretamente do CSV
     csv_path = "data/estruturados/cursos_ipvc.csv"
 
     try:
@@ -1926,20 +1987,12 @@ def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str
             course_name = str(best_row.get("curso", "")).strip()
 
             if provas:
-                lines = [f"As provas de ingresso para {course_name} são:"]
-
-                for prova in re.split(r";|\n|\||\s+ou\s+", provas, flags=re.IGNORECASE):
-                    prova = prova.strip(" -•\t")
-
-                if prova:
-                    lines.append(f"- {prova}")
-
-                if fonte:
-                    lines.append(f"Fonte: {fonte}")
+                lines = build_entry_exam_answer_lines(course_name, [provas])
 
                 csv_meta = dict(best_row)
                 csv_meta["type"] = "structured_course"
                 csv_meta["source"] = best_row.get("fonte", "cursos_ipvc.csv")
+                csv_meta["_fonte_contexto"] = "provas_ingresso"
 
                 csv_doc = (
                     f"Curso: {course_name}\n"
@@ -1952,7 +2005,6 @@ def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str
     except Exception:
         pass
 
-    # 3. Última tentativa: procurar nos PDFs
     collection = get_collection()
     embedding_model = get_embedding_model()
 
@@ -2224,7 +2276,6 @@ def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
     if is_out_of_scope_question(question):
         return FALLBACK_ANSWER, [], []
 
-    # Respostas diretas e rápidas para escolas.
     if is_school_question(question):
         location = detect_location(question)
 
