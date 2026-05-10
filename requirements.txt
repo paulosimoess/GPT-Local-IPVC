@@ -1,6 +1,6 @@
-streamlit
-chromadb
-ollama
-sentence-transformers
-pandas
-pypdf
+streamlit==1.50.0
+chromadb==1.5.9
+ollama==0.6.2
+sentence-transformers==5.1.2
+pandas==2.3.3
+pypdf==6.10.2

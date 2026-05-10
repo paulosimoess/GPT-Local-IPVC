@@ -460,15 +460,17 @@ def build_direct_courses_answer(
     header_parts = []
 
     if degree:
-        header_parts.append(degree)
+        header_parts.append(f"de {degree}")
+
     if school_code:
         header_parts.append(f"na {school_code}")
+
     if location:
         header_parts.append(f"em {location}")
 
     if header_parts:
         header = " ".join(header_parts)
-        lines = [f"Encontrei os seguintes cursos/formações de {header}:"]
+        lines = [f"Encontrei os seguintes cursos/formações {header}:"]
     else:
         lines = ["Encontrei os seguintes cursos/formações no IPVC:"]
 
@@ -814,13 +816,13 @@ def detect_interest_terms(question: str) -> List[str]:
         "contabilidade": ["contabilidade", "fiscalidade", "financas", "auditoria", "empresas"],
         "fiscalidade": ["contabilidade", "fiscalidade", "financas", "auditoria", "empresas"],
         "marketing": ["marketing", "comunicacao", "vendas", "gestao comercial"],
-        "desporto": ["desporto", "atividade fisica", "treino", "exercicio", "bem-estar"],
+        "desporto": ["desporto", "desporto e lazer", "atividade fisica", "treino", "exercicio", "bem-estar", "fitness"],
         "educacao": ["educacao", "ensino", "criancas", "formacao", "intervencao educativa"],
         "criancas": ["educacao", "criancas", "infancia", "ensino", "intervencao educativa"],
         "ambiente": ["ambiente", "sustentabilidade", "agricultura", "recursos naturais", "agronomia"],
         "agricultura": ["agricultura", "agronomia", "ambiente", "sustentabilidade", "recursos naturais"],
         "turismo": ["turismo", "hotelaria", "gestao turistica", "patrimonio", "lazer"],
-        "design": ["design", "multimedia", "criatividade", "comunicacao visual", "produto digital"],
+        "design": ["design", "design de ambientes", "desenho", "artes visuais", "multimedia", "criatividade", "comunicacao visual", "produto digital"],
         "jogos": ["jogos", "videojogos", "multimedia", "computacao grafica", "animacao", "programacao"],
         "videojogos": ["jogos", "videojogos", "multimedia", "computacao grafica", "animacao", "programacao"],
         "matematica": [
@@ -885,21 +887,42 @@ def course_searchable_text(meta: dict) -> str:
         str(meta.get("provas_ingresso_tags", "")),
     ])
 
+def contains_term(text: str, term: str) -> bool:
+    text_norm = normalize_text(text)
+    term_norm = normalize_text(term)
+
+    if not text_norm or not term_norm:
+        return False
+
+    # Se for expressão composta, permite pesquisa direta.
+    if " " in term_norm:
+        return term_norm in text_norm
+
+    # Se for uma palavra simples, obriga a corresponder à palavra inteira.
+    # Isto evita que "tecnologia" bata em "biotecnologia".
+    pattern = r"(?<![a-z0-9])" + re.escape(term_norm) + r"(?![a-z0-9])"
+    return re.search(pattern, text_norm) is not None
+
 
 def score_course_for_interest(meta: dict, question: str) -> int:
     terms = detect_interest_terms(question)
+
     if not terms:
         return 0
 
-    full_text = normalize_text(course_searchable_text(meta))
-    high_weight_text = normalize_text(" ".join([
+    course_name = str(meta.get("curso", ""))
+    degree = normalize_text(meta.get("grau", ""))
+
+    full_text = course_searchable_text(meta)
+
+    high_weight_text = " ".join([
         str(meta.get("curso", "")),
         str(meta.get("area", "")),
         str(meta.get("interesses_relacionados", "")),
         str(meta.get("palavras_chave", "")),
         str(meta.get("provas_ingresso", "")),
         str(meta.get("provas_ingresso_tags", "")),
-    ]))
+    ])
 
     score = 0
 
@@ -907,10 +930,72 @@ def score_course_for_interest(meta: dict, question: str) -> int:
         if not term:
             continue
 
-        if term in high_weight_text:
-            score += 3
-        elif term in full_text:
+        # Maior peso se o interesse aparece diretamente no nome do curso.
+        # Ex.: "design" deve puxar "Design de Ambientes".
+        if contains_term(course_name, term):
+            score += 8
+
+        # Peso intermédio se aparece nos campos principais.
+        elif contains_term(high_weight_text, term):
+            score += 4
+
+        # Peso menor se aparece apenas na descrição/resumo.
+        elif contains_term(full_text, term):
             score += 1
+
+    question_norm = normalize_text(question)
+
+    # Se o utilizador não pediu grau específico, dá ligeira prioridade a licenciaturas.
+    # Evita que mestrados apareçam antes de licenciaturas em perguntas genéricas.
+    requested_degree = detect_degree(question)
+
+    if requested_degree:
+        if normalize_text(requested_degree) == degree:
+            score += 4
+        else:
+            score -= 2
+    else:
+        if degree == "licenciatura":
+            score += 3
+        elif degree == "ctesp":
+            score += 1
+        elif degree in {"mestrado", "pos-graduacao", "pós-graduação"}:
+            score -= 1
+
+    # Afinamentos específicos para interesses frequentes.
+    if "design" in question_norm:
+        if "design" in normalize_text(course_name):
+            score += 8
+
+    if "desporto" in question_norm:
+        if "desporto" in normalize_text(course_name):
+            score += 8
+        if degree == "licenciatura":
+            score += 3
+
+    if "programacao" in question_norm or "programar" in question_norm:
+        programming_terms = [
+            "programacao",
+            "software",
+            "informatica",
+            "computadores",
+            "redes",
+            "sistemas",
+            "aplicacoes",
+        ]
+
+        programming_text = " ".join([
+            str(meta.get("curso", "")),
+            str(meta.get("area", "")),
+            str(meta.get("interesses_relacionados", "")),
+            str(meta.get("palavras_chave", "")),
+            str(meta.get("resumo", "")),
+        ])
+
+        if any(contains_term(programming_text, term) for term in programming_terms):
+            score += 8
+        else:
+            score -= 6
 
     return score
 
@@ -1656,25 +1741,34 @@ def get_entry_exams_from_course_metadata(meta: Optional[dict]) -> List[str]:
         "prova_ingresso",
     ]
 
+    invalid_values = {"", "nan", "none", "null", "nao disponivel", "não disponível"}
+
     raw_values = []
 
     for key in possible_keys:
         value = str(meta.get(key, "")).strip()
-        if value:
+
+        if normalize_text(value) not in invalid_values:
             raw_values.append(value)
 
     exams = []
     seen = set()
 
     for raw in raw_values:
-        parts = re.split(r";|\n|\|", raw)
+        # Divide alternativas separadas por ;, |, quebras de linha ou " ou "
+        parts = re.split(r";|\n|\||\s+ou\s+", raw, flags=re.IGNORECASE)
 
         for part in parts:
             item = part.strip(" -•\t")
+
             if not item:
                 continue
 
+            # Normaliza casos como [16] Matemática para 16 Matemática
+            item = re.sub(r"^\[(\d{1,2})\]\s*", r"\1 ", item).strip()
+
             key = normalize_text(item)
+
             if key not in seen:
                 seen.add(key)
                 exams.append(item)
@@ -1718,9 +1812,58 @@ def find_best_course_match(question: str) -> Tuple[Optional[str], Optional[dict]
 
     return best_doc, best_meta
 
+def find_best_course_with_entry_exams(question: str) -> Tuple[Optional[str], Optional[dict]]:
+    all_documents, all_metadatas = get_all_course_documents()
+    question_norm = normalize_text(question)
+    question_words = get_meaningful_words(question)
+
+    invalid_values = {"", "nan", "none", "null", "nao disponivel", "não disponível"}
+
+    best_score = 0
+    best_doc = None
+    best_meta = None
+
+    for doc, meta in zip(all_documents, all_metadatas):
+        curso = meta.get("curso", "")
+        grau = meta.get("grau", "")
+        provas = str(meta.get("provas_ingresso", "")).strip()
+
+        if not curso:
+            continue
+
+        if normalize_text(provas) in invalid_values:
+            continue
+
+        curso_norm = normalize_text(curso)
+        curso_words = get_meaningful_words(curso)
+
+        score = 0
+
+        if curso_norm and curso_norm in question_norm:
+            score += 100
+
+        overlap = question_words.intersection(curso_words)
+        score += len(overlap) * 10
+
+        if normalize_text(grau) == "licenciatura":
+            score += 5
+
+        if score > best_score:
+            best_score = score
+            best_doc = doc
+            best_meta = meta
+
+    if best_score <= 0:
+        return None, None
+
+    return best_doc, best_meta
 
 def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str]]:
-    course_doc, course_meta = find_best_course_match(question)
+    course_doc, course_meta = find_best_course_with_entry_exams(question)
+
+    if not course_meta:
+        course_doc, course_meta = find_best_course_match(question)
+
     course_name = course_meta.get("curso", "") if course_meta else ""
 
     # 1. Primeiro tenta responder pelos metadados da ChromaDB
@@ -1754,8 +1897,12 @@ def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str
 
             for row in reader:
                 curso = str(row.get("curso", "")).strip()
+                provas_linha = str(row.get("provas_ingresso", "")).strip()
 
                 if not curso:
+                    continue
+
+                if normalize_text(provas_linha) in {"", "nan", "none", "null", "nao disponivel", "não disponível"}:
                     continue
 
                 curso_norm = normalize_text(curso)
@@ -1781,11 +1928,11 @@ def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str
             if provas:
                 lines = [f"As provas de ingresso para {course_name} são:"]
 
-                for prova in re.split(r";|\n|\|", provas):
+                for prova in re.split(r";|\n|\||\s+ou\s+", provas, flags=re.IGNORECASE):
                     prova = prova.strip(" -•\t")
 
-                    if prova:
-                        lines.append(f"- {prova}")
+                if prova:
+                    lines.append(f"- {prova}")
 
                 if fonte:
                     lines.append(f"Fonte: {fonte}")

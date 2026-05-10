@@ -389,6 +389,64 @@ def render_home():
             )
 
 
+def format_answer_html(answer: str) -> str:
+    lines = str(answer).splitlines()
+
+    html_parts = []
+    in_list = False
+
+    def close_list():
+        nonlocal in_list
+
+        if in_list:
+            html_parts.append("</ul>")
+            in_list = False
+
+    for raw_line in lines:
+        line = raw_line.strip()
+
+        if not line:
+            close_list()
+            html_parts.append('<div class="answer-spacer"></div>')
+            continue
+
+        is_dash_item = line.startswith("- ")
+        is_dot_item = line.startswith("•")
+
+        if is_dash_item:
+            item = line[2:].strip()
+
+            if item.lower().startswith("curso 1:") or item.lower().startswith("curso 2:"):
+                close_list()
+                html_parts.append(f'<p class="answer-section-title">{html.escape(item)}</p>')
+                continue
+
+        if is_dash_item or is_dot_item:
+            if not in_list:
+                html_parts.append('<ul class="answer-list">')
+                in_list = True
+
+            if is_dash_item:
+                item = line[2:].strip()
+            else:
+                item = line[1:].strip()
+
+            html_parts.append(f"<li>{html.escape(item)}</li>")
+            continue
+
+        close_list()
+
+        escaped_line = html.escape(line)
+
+        if line.endswith(":"):
+            html_parts.append(f'<p class="answer-section-title">{escaped_line}</p>')
+        else:
+            html_parts.append(f'<p class="answer-paragraph">{escaped_line}</p>')
+
+    close_list()
+
+    return "\n".join(html_parts)
+
 def render_chat():
     if st.button("← Voltar"):
         st.session_state["quick_suggestions"] = []
@@ -464,15 +522,15 @@ def render_chat():
                 except Exception as e:
                     st.error(f"Erro na ligação ao modelo: {e}")
 
-        if st.session_state["last_answer"]:
-            safe_answer = html.escape(st.session_state["last_answer"]).replace("\n", "<br>")
+                if st.session_state["last_answer"]:
+                    safe_answer = format_answer_html(st.session_state["last_answer"])
 
             st.markdown(f"""
             <div class="bot-bubble">
                 <div class="bubble-title">
                     <span>🎓</span> RESPOSTA
                 </div>
-                <div style="line-height:1.9; color:#334155;">
+                <div class="answer-content">
                     {safe_answer}
                 </div>
             </div>
@@ -493,8 +551,9 @@ def render_about():
 
     st.markdown(
         '<p style="font-size:1.05rem; color:#475569; margin-bottom:2rem;">'
-        'Esta aplicação utiliza uma abordagem RAG, combinando dados estruturados e não estruturados '
-        'para responder a perguntas sobre cursos e formações do IPVC.'
+        'Esta aplicação utiliza uma abordagem híbrida: combina respostas diretas a partir de dados estruturados '
+        'com pesquisa semântica em documentos locais através de RAG. O objetivo é responder a perguntas sobre cursos, '
+        'escolas, provas de ingresso, médias de acesso e recomendações de forma rápida e fundamentada nos ficheiros carregados.'
         '</p>',
         unsafe_allow_html=True
     )
@@ -502,36 +561,47 @@ def render_about():
     st.markdown(
         '<div style="background:white; border:1px solid #e2e8f0; border-radius:28px; '
         'padding:2rem; box-shadow:0 15px 35px -18px rgba(15,23,42,0.25); margin-bottom:2rem;">'
-        '<h3 style="color:#0054A4; margin-top:0;">Fluxo RAG da aplicação</h3>'
+        '<h3 style="color:#0054A4; margin-top:0;">Fluxo da aplicação</h3>'
 
         '<div style="font-size:1rem; line-height:2; color:#334155;">'
 
         '<strong>1. Dados locais</strong><br>'
-        'CSVs com cursos, escolas, graus de ensino, localizações e áreas + PDFs/brochuras do IPVC'
+        'A aplicação usa ficheiros CSV com informação estruturada sobre cursos, escolas, médias de acesso '
+        'e provas de ingresso, juntamente com PDFs e brochuras do IPVC.'
         '<br><br>'
 
         '<strong>2. Pré-processamento</strong><br>'
-        'Os dados são carregados, limpos e transformados em blocos de texto pesquisáveis'
+        'Os dados estruturados são convertidos em texto pesquisável com metadados. Os PDFs são lidos, extraídos '
+        'e divididos em blocos de texto.'
         '<br><br>'
 
         '<strong>3. Embeddings</strong><br>'
-        'Cada bloco é convertido num vetor usando SentenceTransformers'
+        'Cada bloco de informação é convertido num vetor através do modelo SentenceTransformers '
+        '<code>all-MiniLM-L6-v2</code>.'
         '<br><br>'
 
         '<strong>4. Base vetorial ChromaDB</strong><br>'
-        'Os vetores e metadados são guardados localmente numa coleção chamada <code>ipvc_courses</code>'
+        'Os vetores, documentos e metadados são guardados localmente numa coleção chamada '
+        '<code>ipvc_courses</code>.'
         '<br><br>'
 
-        '<strong>5. Pesquisa de contexto</strong><br>'
-        'Quando o utilizador faz uma pergunta, o sistema procura os blocos mais relevantes'
+        '<strong>5. Interpretação da pergunta</strong><br>'
+        'O sistema identifica o tipo de pergunta: listagem de cursos, escolas, provas de ingresso, médias, '
+        'saídas profissionais, comparação entre cursos, recomendação ou pesquisa geral.'
         '<br><br>'
 
-        '<strong>6. Modelo local Llama3 via Ollama</strong><br>'
-        'O contexto recuperado é enviado para o modelo, que gera uma resposta em linguagem natural'
+        '<strong>6. Respostas diretas por dados estruturados</strong><br>'
+        'Quando a pergunta pode ser respondida diretamente pelos CSVs, a aplicação evita chamar o modelo Llama3. '
+        'Isto torna respostas como cursos por escola, provas de ingresso e médias muito mais rápidas.'
         '<br><br>'
 
-        '<strong>7. Resposta final</strong><br>'
-        'A resposta é apresentada ao utilizador juntamente com as fontes consultadas'
+        '<strong>7. RAG com modelo local</strong><br>'
+        'Quando é necessária uma resposta mais aberta, o sistema pesquisa contexto na ChromaDB e envia esse contexto '
+        'para o modelo local Llama3 através do Ollama.'
+        '<br><br>'
+
+        '<strong>8. Resposta final e fontes</strong><br>'
+        'A resposta é apresentada ao utilizador de forma formatada, acompanhada das fontes consultadas sempre que existam.'
 
         '</div>'
         '</div>',
@@ -543,18 +613,42 @@ def render_about():
     with col1:
         st.info(
             "**Dados estruturados**\n\n"
-            "- cursos_ipvc.csv\n"
-            "- escolas_ipvc.csv\n"
-            "- Metadados: curso, escola, grau, local, regime, área, estado e fonte"
+            "- `cursos_ipvc.csv`\n"
+            "- `escolas_ipvc.csv`\n"
+            "- `medias_ipvc.csv`\n"
+            "- Cursos, escolas, graus, regimes e localizações\n"
+            "- Saídas profissionais e áreas de interesse\n"
+            "- Provas de ingresso e respetivas fontes\n"
+            "- Médias/notas do último colocado"
         )
 
     with col2:
         st.success(
             "**Dados não estruturados**\n\n"
             "- PDFs e brochuras do IPVC\n"
+            "- Regulamentos e documentos locais\n"
             "- Texto extraído e dividido em blocos\n"
-            "- Pesquisa semântica através da ChromaDB"
+            "- Pesquisa semântica através da ChromaDB\n"
+            "- Apoio a perguntas mais abertas"
         )
+
+    st.markdown(
+        '<div style="background:white; border:1px solid #e2e8f0; border-radius:28px; '
+        'padding:2rem; box-shadow:0 15px 35px -18px rgba(15,23,42,0.18); margin-top:1.5rem;">'
+        '<h3 style="color:#0054A4; margin-top:0;">Funcionalidades principais</h3>'
+        '<div style="font-size:1rem; line-height:2; color:#334155;">'
+        '• Consulta de cursos por escola, grau e localização<br>'
+        '• Consulta de escolas do IPVC<br>'
+        '• Recomendações com base em interesses e média do candidato<br>'
+        '• Comparação entre cursos<br>'
+        '• Consulta de provas de ingresso<br>'
+        '• Consulta de médias e notas do último colocado<br>'
+        '• Consulta de saídas profissionais<br>'
+        '• Apresentação das fontes consultadas'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     st.markdown(
         '<div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:22px; '
