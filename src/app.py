@@ -365,12 +365,12 @@ def render_home():
         
         btn_col1, btn_col2 = st.columns([1, 1])
         with btn_col1:
-            if st.button("🚀 Começar Conversa", use_container_width=True):
+            if st.button("Começar Conversa", use_container_width=True):
                 refresh_quick_suggestions()
                 go_to_page("chat")
 
         with btn_col2:
-            if st.button("🛠️ Ver Arquitetura", use_container_width=True):
+            if st.button("Ver Arquitetura", use_container_width=True):
                 go_to_page("about")
 
     with col2:

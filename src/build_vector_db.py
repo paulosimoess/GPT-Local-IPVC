@@ -64,7 +64,10 @@ def course_to_text(course: Dict) -> str:
         "Resumo: {12}\n"
         "Interesses relacionados: {13}\n"
         "Palavras-chave: {14}\n"
-        "Fonte: {15}"
+        "Provas de ingresso: {15}\n"
+        "Tags das provas de ingresso: {16}\n"
+        "Fonte das provas de ingresso: {17}\n"
+        "Fonte: {18}"
     ).format(
         course.get("curso", ""),
         course.get("escola", ""),
@@ -81,6 +84,9 @@ def course_to_text(course: Dict) -> str:
         course.get("resumo", ""),
         course.get("interesses_relacionados", ""),
         course.get("palavras_chave", ""),
+        course.get("provas_ingresso", ""),
+        course.get("provas_ingresso_tags", ""),
+        course.get("provas_ingresso_fonte", ""),
         course.get("fonte", "")
     )
 
@@ -158,7 +164,10 @@ def build_documents() -> List[Dict]:
                 "resumo": course.get("resumo", ""),
                 "interesses_relacionados": course.get("interesses_relacionados", ""),
                 "palavras_chave": course.get("palavras_chave", ""),
-                "saidas_profissionais": course.get("saidas_profissionais", "")
+                "saidas_profissionais": str(course.get("saidas_profissionais", "")).strip(),
+                "provas_ingresso": str(course.get("provas_ingresso", "")).strip(),
+                "provas_ingresso_tags": str(course.get("provas_ingresso_tags", "")).strip(),
+                "provas_ingresso_fonte": str(course.get("provas_ingresso_fonte", "")).strip()
             }
         })
 

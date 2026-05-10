@@ -2,7 +2,8 @@ from typing import List, Tuple, Optional
 from functools import lru_cache
 import unicodedata
 import re
-
+from difflib import SequenceMatcher
+import csv
 import chromadb
 import ollama
 from sentence_transformers import SentenceTransformer
@@ -26,10 +27,6 @@ def get_collection():
     return client.get_collection(name=COLLECTION_NAME)
 
 
-# ============================================================
-# Normalização e deteção simples
-# ============================================================
-
 def normalize_question(question: str) -> str:
     return question.strip().lower()
 
@@ -39,6 +36,36 @@ def normalize_text(text: str) -> str:
     text = unicodedata.normalize("NFD", text)
     text = "".join(char for char in text if unicodedata.category(char) != "Mn")
     return text
+
+
+def clean_portuguese_pt(text: str) -> str:
+    replacements = {
+        "você está interessado": "tens interesse",
+        "você está interessada": "tens interesse",
+        "se você está interessado": "se tens interesse",
+        "se você está interessada": "se tens interesse",
+        "você": "tu",
+        "se concentra": "centra-se",
+        "se concentram": "centram-se",
+        "em uma": "numa",
+        "em um": "num",
+        "está procurando": "procuras",
+        "relacionado à": "relacionado com a",
+        "relacionada à": "relacionada com a",
+        "tnuma": "tem uma",
+        "tu está": "tu estás",
+    }
+
+    cleaned = str(text).strip()
+
+    for old, new in replacements.items():
+        cleaned = cleaned.replace(old, new)
+        cleaned = cleaned.replace(old.capitalize(), new.capitalize())
+
+    if FALLBACK_ANSWER in cleaned and cleaned != FALLBACK_ANSWER:
+        return FALLBACK_ANSWER
+
+    return cleaned.strip()
 
 
 def detect_school_code(question: str) -> Optional[str]:
@@ -156,10 +183,6 @@ def is_out_of_scope_question(question: str) -> bool:
     return any(normalize_text(term) in question_norm for term in external_terms)
 
 
-# ============================================================
-# Leitura de documentos estruturados da ChromaDB
-# ============================================================
-
 def get_all_school_documents() -> Tuple[List[str], List[dict]]:
     collection = get_collection()
     results = collection.get(where={"type": "structured_school"})
@@ -178,55 +201,89 @@ def get_all_admission_documents() -> Tuple[List[str], List[dict]]:
     return results.get("documents", []), results.get("metadatas", [])
 
 
-def get_school_documents_by_location(location: str) -> Tuple[List[str], List[dict]]:
-    all_documents, all_metadatas = get_all_school_documents()
-
-    filtered_documents = []
-    filtered_metadatas = []
-
-    for doc, meta in zip(all_documents, all_metadatas):
-        meta_location = meta.get("local", "")
-
-        if normalize_text(meta_location) == normalize_text(location):
-            filtered_documents.append(doc)
-            filtered_metadatas.append(meta)
-
-    return filtered_documents, filtered_metadatas
+def get_all_pdf_documents() -> Tuple[List[str], List[dict]]:
+    collection = get_collection()
+    results = collection.get(where={"type": "pdf_chunk"})
+    return results.get("documents", []), results.get("metadatas", [])
 
 
-def get_courses_filtered(
-    degree: Optional[str] = None,
-    school_code: Optional[str] = None,
-    location: Optional[str] = None,
-) -> Tuple[List[str], List[dict]]:
-    all_documents, all_metadatas = get_all_course_documents()
+def get_meaningful_words(text: str) -> set:
+    text_norm = normalize_text(text)
 
-    filtered_documents = []
-    filtered_metadatas = []
+    stopwords = {
+        "de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os",
+        "curso", "cursos", "licenciatura", "mestrado", "ctesp", "ipvc",
+        "media", "nota", "ultimo", "colocado", "vagas", "quais", "qual",
+        "para", "com", "uma", "um", "que", "como", "existem", "fase",
+        "tenho", "gosto", "interesse", "recomendas", "recomenda", "aconselhas",
+    }
 
-    for doc, meta in zip(all_documents, all_metadatas):
-        meta_degree = meta.get("grau", "")
-        meta_school = meta.get("escola", "")
-        meta_location = meta.get("local", "")
+    words = re.findall(r"\b[a-z0-9]+\b", text_norm)
+    return {word for word in words if word not in stopwords and len(word) > 2}
 
-        if degree and normalize_text(meta_degree) != normalize_text(degree):
+
+def course_key(meta: dict) -> Tuple[str, str, str]:
+    return (
+        normalize_text(meta.get("curso", "")),
+        normalize_text(meta.get("grau", "")),
+        normalize_text(meta.get("escola", "")),
+    )
+
+
+def course_display_details(meta: dict, include_local: bool = True) -> str:
+    details = []
+
+    grau = meta.get("grau", "")
+    escola = meta.get("escola", "")
+    local = meta.get("local", "")
+
+    if grau:
+        details.append(str(grau))
+    if escola:
+        details.append(str(escola))
+    if include_local and local:
+        details.append(str(local))
+
+    return ", ".join(details)
+
+
+def find_best_course_match(question: str) -> Tuple[Optional[str], Optional[dict]]:
+    documents, metadatas = get_all_course_documents()
+    question_norm = normalize_text(question)
+    question_words = get_meaningful_words(question)
+
+    exact = []
+    scored = []
+
+    for doc, meta in zip(documents, metadatas):
+        curso = meta.get("curso", "")
+        if not curso:
             continue
 
-        if school_code and normalize_text(meta_school) != normalize_text(school_code):
+        curso_norm = normalize_text(curso)
+
+        if curso_norm and curso_norm in question_norm:
+            exact.append((question_norm.find(curso_norm), -len(curso_norm), doc, meta))
             continue
 
-        if location and normalize_text(meta_location) != normalize_text(location):
-            continue
+        course_words = get_meaningful_words(curso)
+        overlap = question_words.intersection(course_words)
 
-        filtered_documents.append(doc)
-        filtered_metadatas.append(meta)
+        if overlap:
+            score = len(overlap) / max(len(course_words), 1)
+            if len(overlap) >= 2 or score >= 0.5:
+                scored.append((score, len(overlap), doc, meta))
 
-    return filtered_documents, filtered_metadatas
+    if exact:
+        exact = sorted(exact, key=lambda item: (item[0], item[1]))
+        return exact[0][2], exact[0][3]
 
+    if scored:
+        scored = sorted(scored, key=lambda item: (item[0], item[1]), reverse=True)
+        return scored[0][2], scored[0][3]
 
-# ============================================================
-# Escolas e listagens diretas de cursos
-# ============================================================
+    return None, None
+
 
 def is_school_question(question: str) -> bool:
     question_norm = normalize_text(question)
@@ -278,6 +335,46 @@ def is_structured_courses_question(question: str) -> bool:
     ]
 
     return any(normalize_text(keyword) in question_norm for keyword in keywords)
+
+
+def get_school_documents_by_location(location: str) -> Tuple[List[str], List[dict]]:
+    all_documents, all_metadatas = get_all_school_documents()
+
+    filtered_documents = []
+    filtered_metadatas = []
+
+    for doc, meta in zip(all_documents, all_metadatas):
+        if normalize_text(meta.get("local", "")) == normalize_text(location):
+            filtered_documents.append(doc)
+            filtered_metadatas.append(meta)
+
+    return filtered_documents, filtered_metadatas
+
+
+def get_courses_filtered(
+    degree: Optional[str] = None,
+    school_code: Optional[str] = None,
+    location: Optional[str] = None,
+) -> Tuple[List[str], List[dict]]:
+    all_documents, all_metadatas = get_all_course_documents()
+
+    filtered_documents = []
+    filtered_metadatas = []
+
+    for doc, meta in zip(all_documents, all_metadatas):
+        if degree and normalize_text(meta.get("grau", "")) != normalize_text(degree):
+            continue
+
+        if school_code and normalize_text(meta.get("escola", "")) != normalize_text(school_code):
+            continue
+
+        if location and normalize_text(meta.get("local", "")) != normalize_text(location):
+            continue
+
+        filtered_documents.append(doc)
+        filtered_metadatas.append(meta)
+
+    return filtered_documents, filtered_metadatas
 
 
 def build_direct_school_answer(metadatas: List[dict], location: Optional[str] = None) -> str:
@@ -343,7 +440,6 @@ def build_direct_courses_answer(
             parts.append(f"({', '.join(details)})")
 
         extra = []
-
         if estado:
             extra.append(estado)
         if observacoes:
@@ -381,10 +477,6 @@ def build_direct_courses_answer(
 
     return "\n".join(lines)
 
-
-# ============================================================
-# Médias, acesso e candidatura
-# ============================================================
 
 def is_admission_question(question: str) -> bool:
     question_norm = normalize_text(question)
@@ -443,7 +535,7 @@ def format_grade(value) -> str:
         return "não disponível"
 
     if number > 20:
-        return f"{number:.1f} valores (equivalente a {number / 10:.2f}/20)"
+        return f"{number:.1f} pontos (equivalente a {number / 10:.2f}/20)"
 
     return f"{number:.2f}/20"
 
@@ -468,20 +560,6 @@ def detect_average_threshold(question: str) -> Optional[float]:
                 return normalize_grade_to_200(number)
 
     return None
-
-
-def get_meaningful_words(text: str) -> set:
-    text_norm = normalize_text(text)
-
-    stopwords = {
-        "de", "da", "do", "das", "dos", "e", "em", "a", "o", "as", "os",
-        "curso", "cursos", "licenciatura", "mestrado", "ctesp", "ipvc",
-        "media", "nota", "ultimo", "colocado", "vagas", "quais", "qual",
-        "para", "com", "uma", "um", "que", "como", "existem",
-    }
-
-    words = re.findall(r"\b[a-z0-9]+\b", text_norm)
-    return {word for word in words if word not in stopwords and len(word) > 2}
 
 
 def match_admission_courses(question: str, pairs: List[Tuple[str, dict]]) -> List[Tuple[str, dict]]:
@@ -537,17 +615,13 @@ def filter_admission_pairs(question: str, pairs: List[Tuple[str, dict]]) -> List
     filtered = []
 
     for doc, meta in pairs:
-        meta_school = meta.get("escola", "")
-        meta_degree = meta.get("grau", "")
-        meta_phase = meta.get("fase", "")
-
-        if school_code and normalize_text(meta_school) != normalize_text(school_code):
+        if school_code and normalize_text(meta.get("escola", "")) != normalize_text(school_code):
             continue
 
-        if degree and normalize_text(meta_degree) != normalize_text(degree):
+        if degree and normalize_text(meta.get("grau", "")) != normalize_text(degree):
             continue
 
-        if phase and normalize_text(phase) != normalize_text(meta_phase):
+        if phase and normalize_text(phase) != normalize_text(meta.get("fase", "")):
             continue
 
         filtered.append((doc, meta))
@@ -568,7 +642,7 @@ def build_admission_line(meta: dict) -> str:
     header_details = []
 
     if escola:
-        header_details.append(escola)
+        header_details.append(str(escola))
     if ano:
         header_details.append(str(ano))
     if fase:
@@ -675,10 +749,6 @@ def answer_admission_question(question: str) -> Tuple[str, List[dict], List[str]
     return FALLBACK_ANSWER, [], []
 
 
-# ============================================================
-# Recomendações por interesse e média
-# ============================================================
-
 def is_recommendation_question(question: str) -> bool:
     question_norm = normalize_text(question)
 
@@ -706,51 +776,169 @@ def is_recommendation_question(question: str) -> bool:
     return any(normalize_text(keyword) in question_norm for keyword in keywords)
 
 
-def expand_recommendation_query(question: str) -> str:
+def is_similar_word(word: str, target: str, threshold: float = 0.84) -> bool:
+    word_norm = normalize_text(word)
+    target_norm = normalize_text(target)
+
+    if not word_norm or not target_norm:
+        return False
+
+    if word_norm == target_norm:
+        return True
+
+    if len(word_norm) < 5 or len(target_norm) < 5:
+        return False
+
+    return SequenceMatcher(None, word_norm, target_norm).ratio() >= threshold
+
+
+def detect_interest_terms(question: str) -> List[str]:
     question_norm = normalize_text(question)
-    expansions = []
+    question_words = re.findall(r"\b[a-z0-9]+\b", question_norm)
 
     interest_map = {
-        "animais": "animais veterinaria veterinario saude animal cuidados animais producao animal enfermagem veterinaria",
-        "animal": "animais veterinaria veterinario saude animal cuidados animais producao animal enfermagem veterinaria",
-        "veterinaria": "animais veterinaria veterinario saude animal enfermagem veterinaria",
-        "programacao": "programacao informatica software desenvolvimento aplicacoes engenharia informatica tecnologia computadores",
-        "programar": "programacao informatica software desenvolvimento aplicacoes engenharia informatica tecnologia computadores",
-        "computadores": "informatica computadores redes sistemas programacao tecnologia software",
-        "informatica": "informatica programacao software redes sistemas engenharia informatica",
-        "saude": "saude enfermagem cuidados saude comunitaria saude mental fisioterapia gerontologia",
-        "enfermagem": "saude enfermagem cuidados saude hospitalar comunitaria",
-        "gestao": "gestao empresas administracao contabilidade marketing negocios organizacoes",
-        "empresas": "gestao empresas administracao contabilidade marketing negocios organizacoes",
-        "marketing": "marketing comunicacao vendas gestao comercial",
-        "desporto": "desporto atividade fisica treino exercicio saude bem-estar",
-        "educacao": "educacao ensino criancas formacao intervencao educativa",
-        "criancas": "educacao criancas infancia ensino intervencao educativa",
-        "ambiente": "ambiente sustentabilidade agricultura recursos naturais agronomia",
-        "agricultura": "agricultura agronomia ambiente sustentabilidade recursos naturais",
-        "turismo": "turismo hotelaria gestao turistica patrimonio lazer",
-        "design": "design multimedia criatividade comunicacao visual produto digital",
-        "jogos": "jogos digitais programacao multimedia design tecnologia",
-        "redes": "redes sistemas computadores ciberseguranca informatica infraestrutura",
-        "seguranca": "ciberseguranca seguranca informatica redes sistemas",
+        "animais": ["animais", "animal", "veterinaria", "saude animal", "cuidados", "clinica"],
+        "animal": ["animais", "animal", "veterinaria", "saude animal", "cuidados", "clinica"],
+        "veterinaria": ["animais", "animal", "veterinaria", "saude animal", "cuidados", "clinica"],
+        "programacao": ["programacao", "programar", "software", "informatica", "computadores", "tecnologia", "redes", "sistemas", "inteligencia artificial"],
+        "programar": ["programacao", "programar", "software", "informatica", "computadores", "tecnologia", "redes", "sistemas", "inteligencia artificial"],
+        "software": ["programacao", "software", "informatica", "computadores", "tecnologia", "aplicacoes"],
+        "computadores": ["informatica", "computadores", "redes", "sistemas", "programacao", "software"],
+        "informatica": ["informatica", "programacao", "software", "redes", "sistemas", "computadores"],
+        "redes": ["redes", "sistemas", "computadores", "ciberseguranca", "servidores", "infraestruturas"],
+        "seguranca": ["ciberseguranca", "seguranca", "redes", "sistemas", "informatica"],
+        "saude": ["saude", "enfermagem", "cuidados", "fisioterapia", "gerontologia"],
+        "enfermagem": ["saude", "enfermagem", "cuidados", "hospitalar", "comunitaria"],
+        "gestao": ["gestao", "empresas", "administracao", "contabilidade", "marketing", "negocios"],
+        "empresas": ["gestao", "empresas", "administracao", "contabilidade", "marketing", "negocios"],
+        "contabilidade": ["contabilidade", "fiscalidade", "financas", "auditoria", "empresas"],
+        "fiscalidade": ["contabilidade", "fiscalidade", "financas", "auditoria", "empresas"],
+        "marketing": ["marketing", "comunicacao", "vendas", "gestao comercial"],
+        "desporto": ["desporto", "atividade fisica", "treino", "exercicio", "bem-estar"],
+        "educacao": ["educacao", "ensino", "criancas", "formacao", "intervencao educativa"],
+        "criancas": ["educacao", "criancas", "infancia", "ensino", "intervencao educativa"],
+        "ambiente": ["ambiente", "sustentabilidade", "agricultura", "recursos naturais", "agronomia"],
+        "agricultura": ["agricultura", "agronomia", "ambiente", "sustentabilidade", "recursos naturais"],
+        "turismo": ["turismo", "hotelaria", "gestao turistica", "patrimonio", "lazer"],
+        "design": ["design", "multimedia", "criatividade", "comunicacao visual", "produto digital"],
+        "jogos": ["jogos", "videojogos", "multimedia", "computacao grafica", "animacao", "programacao"],
+        "videojogos": ["jogos", "videojogos", "multimedia", "computacao grafica", "animacao", "programacao"],
+        "matematica": [
+            "matematica", "raciocinio logico", "logica", "informatica", "programacao",
+            "software", "redes", "sistemas", "engenharia", "computadores", "tecnologia",
+            "estatistica", "dados", "financas", "contabilidade"
+        ],
+        "matemática": [
+            "matematica", "raciocinio logico", "logica", "informatica", "programacao",
+            "software", "redes", "sistemas", "engenharia", "computadores", "tecnologia",
+            "estatistica", "dados", "financas", "contabilidade"
+        ],
+        "numeros": ["matematica", "estatistica", "dados", "financas", "contabilidade", "gestao", "engenharia"],
+        "números": ["matematica", "estatistica", "dados", "financas", "contabilidade", "gestao", "engenharia"],
+        "calculos": ["matematica", "engenharia", "informatica", "financas", "contabilidade"],
+        "cálculos": ["matematica", "engenharia", "informatica", "financas", "contabilidade"],
+        "estatistica": ["estatistica", "dados", "matematica", "informatica", "gestao", "financas"],
+        "estatística": ["estatistica", "dados", "matematica", "informatica", "gestao", "financas"],
+        "dados": ["dados", "estatistica", "informatica", "programacao", "software", "gestao"],
+        "logica": ["logica", "raciocinio logico", "matematica", "programacao", "informatica", "engenharia"],
+        "lógica": ["logica", "raciocinio logico", "matematica", "programacao", "informatica", "engenharia"],
     }
 
-    for keyword, expansion in interest_map.items():
-        if keyword in question_norm:
-            expansions.append(expansion)
+    terms = []
 
-    if expansions:
-        return question + " " + " ".join(expansions)
+    for keyword, expansion_terms in interest_map.items():
+        keyword_norm = normalize_text(keyword)
 
-    return question
+        found_exact = keyword_norm in question_norm
+        found_fuzzy = any(is_similar_word(word, keyword_norm) for word in question_words)
+
+        if found_exact or found_fuzzy:
+            terms.extend(expansion_terms)
+
+    # Mantém algumas palavras relevantes da pergunta, mas sem deixar que erros
+    # ortográficos dominem a recomendação.
+    for word in get_meaningful_words(question):
+        if len(word) >= 4 and word not in terms:
+            terms.append(word)
+
+    seen = set()
+    unique_terms = []
+
+    for term in terms:
+        term_norm = normalize_text(term)
+        if term_norm and term_norm not in seen:
+            seen.add(term_norm)
+            unique_terms.append(term_norm)
+
+    return unique_terms
+
+def course_searchable_text(meta: dict) -> str:
+    return " ".join([
+        str(meta.get("curso", "")),
+        str(meta.get("area", "")),
+        str(meta.get("resumo", "")),
+        str(meta.get("descricao", "")),
+        str(meta.get("interesses_relacionados", "")),
+        str(meta.get("palavras_chave", "")),
+        str(meta.get("saidas_profissionais", "")),
+        str(meta.get("provas_ingresso", "")),
+        str(meta.get("provas_ingresso_tags", "")),
+    ])
+
+
+def score_course_for_interest(meta: dict, question: str) -> int:
+    terms = detect_interest_terms(question)
+    if not terms:
+        return 0
+
+    full_text = normalize_text(course_searchable_text(meta))
+    high_weight_text = normalize_text(" ".join([
+        str(meta.get("curso", "")),
+        str(meta.get("area", "")),
+        str(meta.get("interesses_relacionados", "")),
+        str(meta.get("palavras_chave", "")),
+        str(meta.get("provas_ingresso", "")),
+        str(meta.get("provas_ingresso_tags", "")),
+    ]))
+
+    score = 0
+
+    for term in terms:
+        if not term:
+            continue
+
+        if term in high_weight_text:
+            score += 3
+        elif term in full_text:
+            score += 1
+
+    return score
 
 
 def get_recommended_courses(question: str, n_results: int = 8) -> Tuple[List[str], List[dict]]:
+    all_documents, all_metadatas = get_all_course_documents()
+
+    scored = []
+    used = set()
+
+    for doc, meta in zip(all_documents, all_metadatas):
+        key = course_key(meta)
+        if key in used:
+            continue
+        used.add(key)
+
+        score = score_course_for_interest(meta, question)
+        if score > 0:
+            scored.append((score, doc, meta))
+
+    if scored:
+        scored = sorted(scored, key=lambda item: item[0], reverse=True)
+        selected = scored[:n_results]
+        return [doc for _, doc, _ in selected], [meta for _, _, meta in selected]
+
     collection = get_collection()
     embedding_model = get_embedding_model()
-
-    expanded_question = expand_recommendation_query(question)
-    query_embedding = embedding_model.encode([expanded_question]).tolist()[0]
+    query_embedding = embedding_model.encode([question]).tolist()[0]
 
     results = collection.query(
         query_embeddings=[query_embedding],
@@ -758,10 +946,7 @@ def get_recommended_courses(question: str, n_results: int = 8) -> Tuple[List[str
         where={"type": "structured_course"},
     )
 
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
-
-    return documents, metadatas
+    return results.get("documents", [[]])[0], results.get("metadatas", [[]])[0]
 
 
 def find_best_admission_for_course(course_meta: dict, preferred_phase: Optional[str] = None) -> Optional[dict]:
@@ -795,11 +980,12 @@ def find_best_admission_for_course(course_meta: dict, preferred_phase: Optional[
         return None
 
     def sort_key(meta: dict):
-        phase = normalize_text(meta.get("fase", ""))
-        phase_priority = 0 if "1." in phase or "1ª" in phase or "1a" in phase else 1
         grade = parse_number(meta.get("nota_ultimo_colocado_contingente_geral", ""))
         grade_200 = normalize_grade_to_200(grade) if grade is not None else 9999
-        return phase_priority, grade_200
+        phase = normalize_text(meta.get("fase", ""))
+        phase_priority = 0 if "1." in phase or "1ª" in phase or "1a" in phase else 1
+        grade_available = 0 if grade is not None else 1
+        return grade_available, grade_200, phase_priority
 
     return sorted(candidates, key=sort_key)[0]
 
@@ -815,14 +1001,10 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
     used_keys = set()
 
     for doc, meta in zip(course_docs, course_metas):
-        curso = meta.get("curso", "")
-        grau = meta.get("grau", "")
-        escola = meta.get("escola", "")
-
-        if not curso:
+        if not meta.get("curso", ""):
             continue
 
-        key = (normalize_text(curso), normalize_text(grau), normalize_text(escola))
+        key = course_key(meta)
         if key in used_keys:
             continue
         used_keys.add(key)
@@ -835,6 +1017,8 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
             if grade is not None:
                 grade = normalize_grade_to_200(grade)
 
+        interest_score = score_course_for_interest(meta, question)
+
         if threshold is None:
             score_group = 0
         elif grade is None:
@@ -844,7 +1028,7 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
         else:
             score_group = 2
 
-        distance = abs((grade or threshold or 0) - (threshold or grade or 0)) if grade is not None and threshold is not None else 0
+        distance = abs(grade - threshold) if grade is not None and threshold is not None else 0
 
         enriched.append({
             "doc": doc,
@@ -853,9 +1037,14 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
             "grade": grade,
             "score_group": score_group,
             "distance": distance,
+            "interest_score": interest_score,
         })
 
-    enriched = sorted(enriched, key=lambda item: (item["score_group"], item["distance"]))
+    if threshold is not None:
+        enriched = sorted(enriched, key=lambda item: (item["score_group"], -item["interest_score"], item["distance"]))
+    else:
+        enriched = sorted(enriched, key=lambda item: (-item["interest_score"], normalize_text(item["course_meta"].get("curso", ""))))
+
     selected = enriched[:3]
 
     if not selected:
@@ -875,19 +1064,9 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
         grade = item["grade"]
 
         curso = meta.get("curso", "")
-        grau = meta.get("grau", "")
-        escola = meta.get("escola", "")
-        local = meta.get("local", "")
         resumo = meta.get("resumo", "") or meta.get("descricao", "")
         area = meta.get("area", "")
-
-        details = []
-        if grau:
-            details.append(grau)
-        if escola:
-            details.append(escola)
-        if local:
-            details.append(local)
+        details = course_display_details(meta, include_local=True)
 
         if resumo:
             explanation = resumo
@@ -899,12 +1078,18 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
         line = f"- {curso}"
 
         if details:
-            line += f" ({', '.join(details)})"
+            line += f" ({details})"
 
         line += f" — {explanation}"
 
+        provas = str(meta.get("provas_ingresso", "")).strip()
+        if provas:
+            line += f" Provas de ingresso: {provas}."
+
         if admission and grade is not None:
-            line += f" Nota do último colocado: {format_grade(admission.get('nota_ultimo_colocado_contingente_geral', ''))}."
+            fase = admission.get("fase", "")
+            fase_text = f" na {fase}" if fase else ""
+            line += f" Nota do último colocado{fase_text}: {format_grade(admission.get('nota_ultimo_colocado_contingente_geral', ''))}."
 
             if threshold is not None:
                 if grade <= threshold:
@@ -915,7 +1100,6 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
             line += " Não encontrei nota do último colocado disponível para confirmar a compatibilidade com a tua média."
 
         lines.append(line)
-
         returned_metas.append(meta)
         returned_docs.append(item["doc"])
 
@@ -925,10 +1109,6 @@ def build_recommendation_answer(question: str, course_docs: List[str], course_me
 
     return "\n".join(lines), returned_metas, returned_docs
 
-
-# ============================================================
-# Saídas profissionais
-# ============================================================
 
 def is_career_question(question: str) -> bool:
     question_norm = normalize_text(question)
@@ -957,7 +1137,6 @@ def is_career_question(question: str) -> bool:
 
 def match_courses_for_career_question(question: str) -> Tuple[List[str], List[dict]]:
     all_documents, all_metadatas = get_all_course_documents()
-
     question_norm = normalize_text(question)
     question_words = set(re.findall(r"\b[a-z0-9]+\b", question_norm))
 
@@ -965,18 +1144,11 @@ def match_courses_for_career_question(question: str) -> Tuple[List[str], List[di
 
     for doc, meta in zip(all_documents, all_metadatas):
         curso = meta.get("curso", "")
-        area = meta.get("area", "")
-        saidas = meta.get("saidas_profissionais", "")
-        interesses = meta.get("interesses_relacionados", "")
-        palavras = meta.get("palavras_chave", "")
-
-        searchable_text = " ".join([curso, area, saidas, interesses, palavras])
-        searchable_norm = normalize_text(searchable_text)
-        course_norm = normalize_text(curso)
-
         if not curso:
             continue
 
+        searchable_norm = normalize_text(course_searchable_text(meta))
+        course_norm = normalize_text(curso)
         score = 0
 
         if course_norm and course_norm in question_norm:
@@ -992,10 +1164,7 @@ def match_courses_for_career_question(question: str) -> Tuple[List[str], List[di
     scored = sorted(scored, key=lambda x: x[0], reverse=True)
     selected = scored[:6]
 
-    documents = [doc for _, doc, _ in selected]
-    metadatas = [meta for _, _, meta in selected]
-
-    return documents, metadatas
+    return [doc for _, doc, _ in selected], [meta for _, _, meta in selected]
 
 
 def build_career_answer(question: str, metadatas: List[dict]) -> str:
@@ -1003,8 +1172,6 @@ def build_career_answer(question: str, metadatas: List[dict]) -> str:
         return FALLBACK_ANSWER
 
     question_norm = normalize_text(question)
-    lines = []
-
     specific_course = None
 
     for meta in metadatas:
@@ -1015,23 +1182,16 @@ def build_career_answer(question: str, metadatas: List[dict]) -> str:
 
     if specific_course:
         curso = specific_course.get("curso", "")
-        escola = specific_course.get("escola", "")
-        grau = specific_course.get("grau", "")
+        details = course_display_details(specific_course, include_local=False)
         saidas = specific_course.get("saidas_profissionais", "")
 
         if not saidas:
             return FALLBACK_ANSWER
 
-        lines.append(f"As saídas profissionais de {curso} são:")
-
-        details = []
-        if grau:
-            details.append(grau)
-        if escola:
-            details.append(escola)
+        lines = [f"As saídas profissionais de {curso} são:"]
 
         if details:
-            lines.append(f"({', '.join(details)})")
+            lines.append(f"({details})")
 
         for item in str(saidas).split(";"):
             item = item.strip()
@@ -1040,32 +1200,22 @@ def build_career_answer(question: str, metadatas: List[dict]) -> str:
 
         return "\n".join(lines)
 
-    lines.append("Encontrei os seguintes cursos relacionados com essa área profissional:")
-
+    lines = ["Encontrei os seguintes cursos relacionados com essa área profissional:"]
     used = set()
 
     for meta in metadatas[:5]:
         curso = meta.get("curso", "")
-        escola = meta.get("escola", "")
-        grau = meta.get("grau", "")
-        saidas = meta.get("saidas_profissionais", "")
-        area = meta.get("area", "")
-
         if not curso or curso in used:
             continue
 
         used.add(curso)
-        details = []
-
-        if grau:
-            details.append(grau)
-        if escola:
-            details.append(escola)
+        details = course_display_details(meta, include_local=False)
+        saidas = meta.get("saidas_profissionais", "")
+        area = meta.get("area", "")
 
         info = curso
-
         if details:
-            info += f" ({', '.join(details)})"
+            info += f" ({details})"
 
         if saidas:
             info += f" — saídas profissionais: {saidas}"
@@ -1079,10 +1229,6 @@ def build_career_answer(question: str, metadatas: List[dict]) -> str:
 
     return "\n".join(lines)
 
-
-# ============================================================
-# Comparação entre cursos
-# ============================================================
 
 def is_comparison_question(question: str) -> bool:
     question_norm = normalize_text(question)
@@ -1114,55 +1260,151 @@ def is_comparison_question(question: str) -> bool:
     return False
 
 
-def find_courses_for_comparison(question: str, max_courses: int = 3) -> Tuple[List[str], List[dict]]:
-    all_documents, all_metadatas = get_all_course_documents()
-    question_norm = normalize_text(question)
+def parse_comparison_course_phrases(question: str) -> List[str]:
+    question_clean = re.sub(r"[?.!]+$", "", question.strip())
+    question_clean = re.sub(r"\s+", " ", question_clean)
 
-    exact_matches = []
-    used_keys = set()
+    patterns = [
+        r"^(?:compara|comparar|compara-me|compara me)\s+(.+?)\s+com\s+(.+)$",
+        r"^(?:qual(?:\s+é|\s+e)?\s+a\s+diferença\s+entre|qual(?:\s+é|\s+e)?\s+a\s+diferenca\s+entre|diferenças\s+entre|diferencas\s+entre|entre)\s+(.+?)\s+e\s+(.+)$",
+        r"^(.+?)\s+ou\s+(.+)$",
+    ]
 
-    for doc, meta in zip(all_documents, all_metadatas):
+    for pattern in patterns:
+        match = re.search(pattern, question_clean, flags=re.IGNORECASE)
+        if match:
+            return [part.strip(" ,.;:") for part in match.groups() if part.strip(" ,.;:")]
+
+    return []
+
+
+def score_course_name_against_phrase(course_name: str, phrase: str) -> float:
+    course_norm = normalize_text(course_name)
+    phrase_norm = normalize_text(phrase)
+
+    if not course_norm or not phrase_norm:
+        return 0
+
+    if course_norm == phrase_norm:
+        return 100
+
+    if course_norm in phrase_norm:
+        return 95 + min(len(course_norm), 40) / 100
+
+    if phrase_norm in course_norm:
+        return 90 - max(0, len(course_norm) - len(phrase_norm)) / 100
+
+    phrase_words = get_meaningful_words(phrase_norm)
+    course_words = get_meaningful_words(course_norm)
+
+    if not phrase_words or not course_words:
+        return 0
+
+    overlap = phrase_words.intersection(course_words)
+
+    if not overlap:
+        fuzzy_overlap = 0
+        for pw in phrase_words:
+            if any(is_similar_word(pw, cw, threshold=0.86) for cw in course_words):
+                fuzzy_overlap += 1
+        if fuzzy_overlap == 0:
+            return 0
+
+        return 55 + (fuzzy_overlap / len(phrase_words)) * 20
+
+    coverage = len(overlap) / len(phrase_words)
+    precision = len(overlap) / len(course_words)
+
+    return 60 + coverage * 25 + precision * 10
+
+
+def find_best_course_for_phrase(
+    phrase: str,
+    documents: List[str],
+    metadatas: List[dict],
+    excluded_keys: Optional[set] = None
+) -> Tuple[Optional[str], Optional[dict]]:
+    excluded_keys = excluded_keys or set()
+
+    scored = []
+
+    for doc, meta in zip(documents, metadatas):
         curso = meta.get("curso", "")
 
         if not curso:
             continue
 
-        curso_norm = normalize_text(curso)
+        key = course_key(meta)
+        if key in excluded_keys:
+            continue
 
-        if curso_norm and curso_norm in question_norm:
-            key = (
-                normalize_text(meta.get("curso", "")),
-                normalize_text(meta.get("grau", "")),
-                normalize_text(meta.get("escola", "")),
+        score = score_course_name_against_phrase(curso, phrase)
+
+        if score > 0:
+            scored.append((score, -len(normalize_text(curso)), doc, meta))
+
+    if not scored:
+        return None, None
+
+    scored = sorted(scored, key=lambda item: (item[0], item[1]), reverse=True)
+    return scored[0][2], scored[0][3]
+
+
+def find_courses_for_comparison(question: str, max_courses: int = 3) -> Tuple[List[str], List[dict]]:
+    all_documents, all_metadatas = get_all_course_documents()
+
+    phrases = parse_comparison_course_phrases(question)
+    selected_docs = []
+    selected_metas = []
+    used_keys = set()
+
+    if len(phrases) >= 2:
+        for phrase in phrases[:max_courses]:
+            doc, meta = find_best_course_for_phrase(
+                phrase=phrase,
+                documents=all_documents,
+                metadatas=all_metadatas,
+                excluded_keys=used_keys,
             )
 
+            if meta:
+                selected_docs.append(doc or "")
+                selected_metas.append(meta)
+                used_keys.add(course_key(meta))
+
+        if len(selected_metas) >= 2:
+            return selected_docs, selected_metas
+
+    question_norm = normalize_text(question)
+    exact_matches = []
+
+    for doc, meta in zip(all_documents, all_metadatas):
+        curso = meta.get("curso", "")
+        if not curso:
+            continue
+
+        curso_norm = normalize_text(curso)
+        if curso_norm and curso_norm in question_norm:
+            key = course_key(meta)
             if key not in used_keys:
                 used_keys.add(key)
-                exact_matches.append((len(curso_norm), doc, meta))
+                exact_matches.append((question_norm.find(curso_norm), -len(curso_norm), doc, meta))
 
-    exact_matches = sorted(exact_matches, key=lambda item: item[0], reverse=True)
+    exact_matches = sorted(exact_matches, key=lambda item: (item[0], item[1]))
 
     if len(exact_matches) >= 2:
         selected = exact_matches[:max_courses]
-        documents = [doc for _, doc, _ in selected]
-        metadatas = [meta for _, _, meta in selected]
-        return documents, metadatas
+        return [doc for _, _, doc, _ in selected], [meta for _, _, _, meta in selected]
 
     question_words = get_meaningful_words(question)
     scored = []
 
     for doc, meta in zip(all_documents, all_metadatas):
         curso = meta.get("curso", "")
-
         if not curso:
             continue
 
-        key = (
-            normalize_text(meta.get("curso", "")),
-            normalize_text(meta.get("grau", "")),
-            normalize_text(meta.get("escola", "")),
-        )
-
+        key = course_key(meta)
         if key in used_keys:
             continue
 
@@ -1180,122 +1422,134 @@ def find_courses_for_comparison(question: str, max_courses: int = 3) -> Tuple[Li
     selected_docs = []
     selected_metas = []
 
+    if exact_matches:
+        selected_docs.append(exact_matches[0][2])
+        selected_metas.append(exact_matches[0][3])
+        used_keys.add(course_key(exact_matches[0][3]))
+
     for _, _, doc, meta in scored:
+        key = course_key(meta)
+
+        if key in used_keys:
+            continue
+
         selected_docs.append(doc)
         selected_metas.append(meta)
+        used_keys.add(key)
 
         if len(selected_metas) >= max_courses:
             break
 
-    if exact_matches:
-        selected_docs = [doc for _, doc, _ in exact_matches[:1]] + selected_docs
-        selected_metas = [meta for _, _, meta in exact_matches[:1]] + selected_metas
-
     return selected_docs[:max_courses], selected_metas[:max_courses]
 
+def split_semicolon_items(text: str, max_items: int = 3) -> List[str]:
+    items = []
 
-def build_comparison_context(context_chunks: List[str], metadatas: List[dict]) -> str:
+    for item in str(text).split(";"):
+        item = item.strip()
+        if item:
+            items.append(item)
+
+        if len(items) >= max_items:
+            break
+
+    return items
+
+
+def compact_focus(meta: dict) -> str:
+    resumo = str(meta.get("resumo", "")).strip()
+    area = str(meta.get("area", "")).strip()
+    interesses = split_semicolon_items(meta.get("interesses_relacionados", ""), max_items=3)
+    palavras = split_semicolon_items(meta.get("palavras_chave", ""), max_items=3)
+
+    if resumo:
+        return resumo
+
+    if interesses:
+        return "Formação relacionada com " + ", ".join(interesses) + "."
+
+    if palavras:
+        return "Formação relacionada com " + ", ".join(palavras) + "."
+
+    if area:
+        return f"Formação na área de {area}."
+
+    return "Informação de síntese não disponível nos dados estruturados."
+
+
+def build_comparison_difference_lines(meta1: dict, meta2: dict) -> List[str]:
+    curso1 = meta1.get("curso", "Curso 1")
+    curso2 = meta2.get("curso", "Curso 2")
+    area1 = meta1.get("area", "")
+    area2 = meta2.get("area", "")
+    interests1 = split_semicolon_items(meta1.get("interesses_relacionados", ""), max_items=4)
+    interests2 = split_semicolon_items(meta2.get("interesses_relacionados", ""), max_items=4)
+    saidas1 = split_semicolon_items(meta1.get("saidas_profissionais", ""), max_items=3)
+    saidas2 = split_semicolon_items(meta2.get("saidas_profissionais", ""), max_items=3)
+
     lines = []
 
-    for idx, (doc, meta) in enumerate(zip(context_chunks, metadatas), start=1):
+    if area1 and area2 and normalize_text(area1) != normalize_text(area2):
+        lines.append(f"{curso1} enquadra-se mais em {area1}, enquanto {curso2} se enquadra mais em {area2}.")
+    elif area1 and area2:
+        lines.append(f"Ambos pertencem à área de {area1}, mas têm focos diferentes dentro dessa área.")
+
+    if interests1 or interests2:
+        part1 = ", ".join(interests1) if interests1 else "os temas principais indicados no curso"
+        part2 = ", ".join(interests2) if interests2 else "os temas principais indicados no curso"
+        lines.append(f"{curso1} está mais associado a {part1}; {curso2} está mais associado a {part2}.")
+
+    if saidas1 or saidas2:
+        part1 = ", ".join(saidas1) if saidas1 else "saídas profissionais não especificadas"
+        part2 = ", ".join(saidas2) if saidas2 else "saídas profissionais não especificadas"
+        lines.append(f"Nas saídas profissionais, {curso1} aponta para {part1}; {curso2} aponta para {part2}.")
+
+    if len(lines) < 3:
+        lines.append("A escolha deve depender sobretudo da área técnica em que se pretende aprofundar competências.")
+
+    return lines[:3]
+
+
+def build_comparison_answer(metadatas: List[dict]) -> str:
+    if len(metadatas) < 2:
+        return FALLBACK_ANSWER
+
+    meta1 = metadatas[0]
+    meta2 = metadatas[1]
+
+    curso1 = meta1.get("curso", "")
+    curso2 = meta2.get("curso", "")
+
+    lines = ["Comparação entre os cursos:", ""]
+
+    for idx, meta in enumerate([meta1, meta2], start=1):
         curso = meta.get("curso", "")
-        grau = meta.get("grau", "")
-        escola = meta.get("escola", "")
-        area = meta.get("area", "")
-        source = meta.get("source", "")
+        grau = meta.get("grau", "não disponível")
+        escola = meta.get("escola", "não disponível")
+        sintese = compact_focus(meta)
 
-        lines.append(
-            f"Curso {idx}:\n"
-            f"Nome: {curso}\n"
-            f"Grau: {grau}\n"
-            f"Escola: {escola}\n"
-            f"Área: {area}\n"
-            f"Fonte: {source}\n"
-            f"Informação disponível:\n{doc[:1800]}"
-        )
+        lines.append(f"- Curso {idx}: {curso}")
+        lines.append(f"Grau: {grau}")
+        lines.append(f"Escola: {escola}")
+        lines.append(f"Síntese: {sintese}")
+        lines.append("")
 
-    return "\n\n---\n\n".join(lines)
+    lines.append("Principais diferenças:")
+    for difference in build_comparison_difference_lines(meta1, meta2):
+        lines.append(f"- {difference}")
 
+    focus1 = split_semicolon_items(meta1.get("interesses_relacionados", ""), max_items=3)
+    focus2 = split_semicolon_items(meta2.get("interesses_relacionados", ""), max_items=3)
 
-def build_comparison_prompt(question: str, comparison_context: str) -> str:
-    return f"""
-És um assistente académico especializado nos cursos e formações do IPVC.
+    focus1_text = ", ".join(focus1) if focus1 else meta1.get("area", "esta área")
+    focus2_text = ", ".join(focus2) if focus2 else meta2.get("area", "esta área")
 
-Tarefa:
-Comparar cursos com base apenas no contexto fornecido.
+    lines.append("")
+    lines.append("Indicação final:")
+    lines.append(f"- {curso1} pode fazer mais sentido se procuras uma formação ligada a {focus1_text}.")
+    lines.append(f"- {curso2} pode fazer mais sentido se procuras uma formação ligada a {focus2_text}.")
 
-Regras obrigatórias:
-- Usa apenas os cursos presentes no contexto.
-- Não inventes cursos, dados, médias, saídas profissionais ou características.
-- Não uses conhecimento externo.
-- Se não houver pelo menos dois cursos no contexto, responde exatamente: "{FALLBACK_ANSWER}"
-- Responde em português de Portugal.
-- Nunca uses expressões brasileiras como "se concentra", "em uma" ou "em um".
-- Usa frases impessoais sempre que possível.
-- Não uses markdown com negrito.
-- Não uses asteriscos.
-- Sê claro, objetivo e útil para um candidato.
-- Usa tópicos simples começados por "-".
-- Não faças uma resposta demasiado longa.
-- Não substituas um curso pedido por outro curso parecido sem dizer explicitamente que o curso pedido não foi encontrado.
-- Na indicação final, usa sempre "Esta opção pode fazer mais sentido se..." em vez de frases com "tu" ou "você".
-
-Estrutura obrigatória:
-Começa exatamente com:
-"Comparação entre os cursos:"
-
-Depois usa este formato:
-
-- Curso 1: nome do curso
-Grau:
-Escola:
-Síntese:
-
-- Curso 2: nome do curso
-Grau:
-Escola:
-Síntese:
-
-Principais diferenças:
-- diferença 1
-- diferença 2
-- diferença 3
-
-Indicação final:
-- Esta opção pode fazer mais sentido se...
-- A outra opção pode fazer mais sentido se...
-
-Contexto:
-{comparison_context}
-
-Pergunta do utilizador:
-{question}
-
-Resposta:
-""".strip()
-
-
-def clean_portuguese_pt(text: str) -> str:
-    replacements = {
-        "você está interessado": "tens interesse",
-        "você está interessada": "tens interesse",
-        "se você está interessado": "se tens interesse",
-        "se você está interessada": "se tens interesse",
-        "você": "tu",
-        "se concentra": "centra-se",
-        "se concentram": "centram-se",
-        "em uma": "numa",
-        "em um": "num",
-        "através de uma": "através de uma",
-    }
-
-    cleaned = text
-
-    for old, new in replacements.items():
-        cleaned = cleaned.replace(old, new)
-        cleaned = cleaned.replace(old.capitalize(), new.capitalize())
-
-    return cleaned.strip()
+    return "\n".join(lines)
 
 
 def answer_comparison_question(question: str) -> Tuple[str, List[dict], List[str]]:
@@ -1304,26 +1558,9 @@ def answer_comparison_question(question: str) -> Tuple[str, List[dict], List[str
     if len(metadatas) < 2:
         return FALLBACK_ANSWER, [], []
 
-    comparison_context = build_comparison_context(context_chunks, metadatas)
-    prompt = build_comparison_prompt(question, comparison_context)
+    answer = build_comparison_answer(metadatas)
+    return answer, metadatas[:2], context_chunks[:2]
 
-    response = ollama.chat(
-        model=OLLAMA_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        options={
-            "temperature": 0.1,
-            "num_predict": 650,
-            "num_ctx": 4096,
-        },
-    )
-
-    answer = clean_portuguese_pt(response["message"]["content"])
-    return answer, metadatas, context_chunks
-
-
-# ============================================================
-# Provas de ingresso
-# ============================================================
 
 def is_entry_exam_question(question: str) -> bool:
     question_norm = normalize_text(question)
@@ -1343,20 +1580,246 @@ def is_entry_exam_question(question: str) -> bool:
     return any(normalize_text(keyword) in question_norm for keyword in keywords)
 
 
+def clean_exam_name(name: str) -> str:
+    name = re.sub(r"\s+", " ", str(name)).strip(" .;,:-/")
+
+    stop_markers = [
+        " Curso", " Cursos", " Escola", " Grau", " Duração", " Duracao", " Regime",
+        " Vagas", " Candidatura", " Código", " Codigo", " Fonte", " Provas",
+        " Local", " Condições", " Condicoes", " Observações", " Observacoes",
+    ]
+
+    for marker in stop_markers:
+        index = name.find(marker)
+        if index > 0:
+            name = name[:index].strip(" .;,:-/")
+
+    return name
+
+
+def extract_entry_exams_from_text(text: str) -> List[str]:
+    exams = []
+    seen = set()
+
+    code_pattern = re.compile(
+        r"\[\s*(\d{1,2})\s*\]\s*([A-Za-zÀ-ÿ]+(?:\s+(?:[A-Za-zÀ-ÿ]+|e|de|da|do|das|dos|às|a|ao|à)){0,7})"
+    )
+
+    for match in code_pattern.finditer(text):
+        code = match.group(1).zfill(2)
+        name = clean_exam_name(match.group(2))
+
+        if not name or len(name) < 3:
+            continue
+
+        exam = f"[{code}] {name}"
+        key = normalize_text(exam)
+
+        if key not in seen:
+            seen.add(key)
+            exams.append(exam)
+
+    if exams:
+        return exams
+
+    text_norm = normalize_text(text)
+    marker = "provas de ingresso"
+    index = text_norm.find(marker)
+
+    if index == -1:
+        return []
+
+    snippet = text[index:index + 350]
+    snippet = re.sub(r"\s+", " ", snippet).strip()
+    snippet = re.sub(r"(?i)^provas?\s+de\s+ingresso\s*[:\-]?\s*", "", snippet).strip()
+
+    for delimiter in [" Curso", " Escola", " Grau", " Duração", " Duracao", " Regime", " Vagas", " Fonte"]:
+        pos = snippet.find(delimiter)
+        if pos > 0:
+            snippet = snippet[:pos].strip()
+
+    if snippet:
+        return [snippet.strip(" .;:")]
+
+    return []
+
+
+def get_entry_exams_from_course_metadata(meta: Optional[dict]) -> List[str]:
+    if not meta:
+        return []
+
+    possible_keys = [
+        "provas_ingresso",
+        "provas_de_ingresso",
+        "exames_ingresso",
+        "exames_nacionais",
+        "prova_ingresso",
+    ]
+
+    raw_values = []
+
+    for key in possible_keys:
+        value = str(meta.get(key, "")).strip()
+        if value:
+            raw_values.append(value)
+
+    exams = []
+    seen = set()
+
+    for raw in raw_values:
+        parts = re.split(r";|\n|\|", raw)
+
+        for part in parts:
+            item = part.strip(" -•\t")
+            if not item:
+                continue
+
+            key = normalize_text(item)
+            if key not in seen:
+                seen.add(key)
+                exams.append(item)
+
+    return exams
+
+
+def find_best_course_match(question: str) -> Tuple[Optional[str], Optional[dict]]:
+    all_documents, all_metadatas = get_all_course_documents()
+    question_norm = normalize_text(question)
+    question_words = get_meaningful_words(question)
+
+    best_score = 0
+    best_doc = None
+    best_meta = None
+
+    for doc, meta in zip(all_documents, all_metadatas):
+        curso = meta.get("curso", "")
+
+        if not curso:
+            continue
+
+        curso_norm = normalize_text(curso)
+        curso_words = get_meaningful_words(curso)
+
+        score = 0
+
+        if curso_norm and curso_norm in question_norm:
+            score += 100
+
+        overlap = question_words.intersection(curso_words)
+        score += len(overlap) * 10
+
+        if score > best_score:
+            best_score = score
+            best_doc = doc
+            best_meta = meta
+
+    if best_score <= 0:
+        return None, None
+
+    return best_doc, best_meta
+
+
 def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str]]:
+    course_doc, course_meta = find_best_course_match(question)
+    course_name = course_meta.get("curso", "") if course_meta else ""
+
+    # 1. Primeiro tenta responder pelos metadados da ChromaDB
+    metadata_exams = get_entry_exams_from_course_metadata(course_meta)
+
+    if metadata_exams:
+        lines = [f"As provas de ingresso para {course_name} são:"]
+
+        for exam in metadata_exams:
+            lines.append(f"- {exam}")
+
+        fonte = str(course_meta.get("provas_ingresso_fonte", "")).strip()
+
+        if fonte:
+            lines.append(f"Fonte: {fonte}")
+
+        return "\n".join(lines), [course_meta], [course_doc or ""]
+
+    # 2. Se a ChromaDB ainda não tiver as provas, tenta ler diretamente do CSV
+    csv_path = "data/estruturados/cursos_ipvc.csv"
+
+    try:
+        question_norm = normalize_text(question)
+        question_words = get_meaningful_words(question)
+
+        best_row = None
+        best_score = 0
+
+        with open(csv_path, mode="r", encoding="utf-8-sig", newline="") as file:
+            reader = csv.DictReader(file)
+
+            for row in reader:
+                curso = str(row.get("curso", "")).strip()
+
+                if not curso:
+                    continue
+
+                curso_norm = normalize_text(curso)
+                curso_words = get_meaningful_words(curso)
+
+                score = 0
+
+                if curso_norm and curso_norm in question_norm:
+                    score += 100
+
+                overlap = question_words.intersection(curso_words)
+                score += len(overlap) * 10
+
+                if score > best_score:
+                    best_score = score
+                    best_row = row
+
+        if best_row and best_score > 0:
+            provas = str(best_row.get("provas_ingresso", "")).strip()
+            fonte = str(best_row.get("provas_ingresso_fonte", "")).strip()
+            course_name = str(best_row.get("curso", "")).strip()
+
+            if provas:
+                lines = [f"As provas de ingresso para {course_name} são:"]
+
+                for prova in re.split(r";|\n|\|", provas):
+                    prova = prova.strip(" -•\t")
+
+                    if prova:
+                        lines.append(f"- {prova}")
+
+                if fonte:
+                    lines.append(f"Fonte: {fonte}")
+
+                csv_meta = dict(best_row)
+                csv_meta["type"] = "structured_course"
+                csv_meta["source"] = best_row.get("fonte", "cursos_ipvc.csv")
+
+                csv_doc = (
+                    f"Curso: {course_name}\n"
+                    f"Provas de ingresso: {provas}\n"
+                    f"Fonte das provas de ingresso: {fonte}"
+                )
+
+                return "\n".join(lines), [csv_meta], [csv_doc]
+
+    except Exception:
+        pass
+
+    # 3. Última tentativa: procurar nos PDFs
     collection = get_collection()
     embedding_model = get_embedding_model()
 
-    expanded_question = (
-        question
-        + " provas de ingresso exames nacionais candidatura acesso ensino superior IPVC curso"
-    )
+    if course_name:
+        query = f"{course_name} provas de ingresso exames nacionais acesso IPVC"
+    else:
+        query = f"{question} provas de ingresso exames nacionais acesso IPVC"
 
-    query_embedding = embedding_model.encode([expanded_question]).tolist()[0]
+    query_embedding = embedding_model.encode([query]).tolist()[0]
 
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=10,
+        n_results=5,
+        where={"type": "pdf_chunk"},
     )
 
     documents = results.get("documents", [[]])[0]
@@ -1365,50 +1828,58 @@ def answer_entry_exam_question(question: str) -> Tuple[str, List[dict], List[str
     if not documents:
         return FALLBACK_ANSWER, [], []
 
-    context_text = "\n\n---\n\n".join(documents)
+    course_norm = normalize_text(course_name)
 
-    prompt = f"""
-És um assistente académico especializado no acesso aos cursos do IPVC.
+    candidate_indices = []
 
-Tarefa:
-Responder a perguntas sobre provas de ingresso e exames nacionais.
+    if course_norm:
+        for idx, doc in enumerate(documents):
+            if course_norm in normalize_text(doc):
+                candidate_indices.append(idx)
 
-Regras obrigatórias:
-- Usa apenas o contexto fornecido.
-- Não inventes provas de ingresso.
-- Não uses conhecimento externo.
-- Se o contexto não indicar claramente as provas de ingresso, responde exatamente: "{FALLBACK_ANSWER}"
-- Responde em português de Portugal.
-- Sê direto.
-- Se encontrares a informação, indica o curso e as respetivas provas de ingresso.
-- Usa tópicos simples.
+    if not candidate_indices:
+        candidate_indices = list(range(len(documents)))
 
-Contexto:
-{context_text}
+    exams = []
+    used_exam_keys = set()
 
-Pergunta:
-{question}
+    for idx in candidate_indices:
+        doc = documents[idx]
+        doc_norm = normalize_text(doc)
 
-Resposta:
-""".strip()
+        if course_norm and course_norm in doc_norm:
+            pos = doc_norm.find(course_norm)
+            snippet = doc[max(0, pos - 600):pos + 1200]
+        else:
+            snippet = doc
 
-    response = ollama.chat(
-        model=OLLAMA_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        options={
-            "temperature": 0.1,
-            "num_predict": 400,
-            "num_ctx": 4096,
-        },
-    )
+        for exam in extract_entry_exams_from_text(snippet):
+            key = normalize_text(exam)
 
-    answer = clean_portuguese_pt(response["message"]["content"])
-    return answer, metadatas, documents
+            if key not in used_exam_keys:
+                used_exam_keys.add(key)
+                exams.append(exam)
 
+    if not exams:
+        return FALLBACK_ANSWER, [], []
 
-# ============================================================
-# Mudança de curso / transferência / reingresso
-# ============================================================
+    if course_name:
+        lines = [f"As provas de ingresso para {course_name} são:"]
+    else:
+        lines = ["Encontrei as seguintes provas de ingresso nos documentos disponíveis:"]
+
+    for exam in exams[:6]:
+        lines.append(f"- {exam}")
+
+    returned_metas = metadatas
+    returned_docs = documents
+
+    if course_meta:
+        returned_metas = [course_meta] + returned_metas
+        returned_docs = [course_doc or ""] + returned_docs
+
+    return "\n".join(lines), returned_metas, returned_docs
+
 
 def is_transfer_question(question: str) -> bool:
     question_norm = normalize_text(question)
@@ -1433,73 +1904,108 @@ def is_transfer_question(question: str) -> bool:
     return any(normalize_text(keyword) in question_norm for keyword in keywords)
 
 
+def get_pdf_chunks_by_keywords(keywords: List[str], max_chunks: int = 6) -> Tuple[List[str], List[dict]]:
+    documents, metadatas = get_all_pdf_documents()
+    scored = []
+
+    normalized_keywords = [normalize_text(keyword) for keyword in keywords]
+
+    for doc, meta in zip(documents, metadatas):
+        source = str(meta.get("source", ""))
+        searchable = normalize_text(source + "\n" + doc)
+        score = 0
+
+        for keyword in normalized_keywords:
+            if keyword and keyword in searchable:
+                score += 3
+
+        if "regulamento" in searchable:
+            score += 1
+        if "reingresso" in searchable:
+            score += 2
+        if "mudanca" in searchable or "mudança" in searchable:
+            score += 2
+        if "transferencia" in searchable or "transferência" in searchable:
+            score += 2
+
+        if score > 0:
+            scored.append((score, doc, meta))
+
+    scored = sorted(scored, key=lambda item: item[0], reverse=True)
+    selected = scored[:max_chunks]
+
+    return [doc for _, doc, _ in selected], [meta for _, _, meta in selected]
+
+
+def extract_relevant_sentences_from_documents(
+    documents: List[str],
+    keywords: List[str],
+    max_sentences: int = 5
+) -> List[str]:
+    normalized_keywords = [normalize_text(keyword) for keyword in keywords]
+    selected = []
+    seen = set()
+
+    for doc in documents:
+        parts = re.split(r"(?<=[.!?])\s+|\n+", doc)
+
+        for part in parts:
+            sentence = re.sub(r"\s+", " ", part).strip(" -•\t")
+
+            if len(sentence) < 45 or len(sentence) > 450:
+                continue
+
+            sentence_norm = normalize_text(sentence)
+
+            if any(keyword in sentence_norm for keyword in normalized_keywords):
+                key = sentence_norm[:160]
+
+                if key not in seen:
+                    seen.add(key)
+                    selected.append(sentence)
+
+            if len(selected) >= max_sentences:
+                return selected
+
+    return selected
+
+
 def answer_transfer_question(question: str) -> Tuple[str, List[dict], List[str]]:
-    collection = get_collection()
-    embedding_model = get_embedding_model()
+    keywords = [
+        "mudança de curso",
+        "mudanca de curso",
+        "transferência",
+        "transferencia",
+        "reingresso",
+        "concurso especial",
+        "concursos especiais",
+        "mudança de par instituição curso",
+        "mudanca de par instituicao curso",
+        "par instituição curso",
+        "par instituicao curso",
+    ]
 
-    expanded_question = (
-        question
-        + " mudança de curso transferência reingresso concurso especial regulamento candidatura IPVC par instituição curso"
-    )
-
-    query_embedding = embedding_model.encode([expanded_question]).tolist()[0]
-
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=10,
-        where={"type": "pdf_chunk"},
-    )
-
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
+    documents, metadatas = get_pdf_chunks_by_keywords(keywords, max_chunks=8)
 
     if not documents:
         return FALLBACK_ANSWER, [], []
 
-    context_text = "\n\n---\n\n".join(documents)
-
-    prompt = f"""
-És um assistente académico especializado no IPVC.
-
-Tarefa:
-Responder a perguntas sobre mudança de curso, transferência, reingresso ou concursos especiais.
-
-Regras obrigatórias:
-- Usa apenas o contexto fornecido.
-- Não inventes regras, prazos, documentos ou condições.
-- Não uses conhecimento externo.
-- Se o contexto não indicar claramente a resposta, responde exatamente: "{FALLBACK_ANSWER}"
-- Responde em português de Portugal.
-- Explica de forma simples e objetiva.
-- Quando aplicável, refere que o candidato deve consultar os serviços académicos ou a página oficial do IPVC.
-- Usa tópicos simples.
-
-Contexto:
-{context_text}
-
-Pergunta:
-{question}
-
-Resposta:
-""".strip()
-
-    response = ollama.chat(
-        model=OLLAMA_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        options={
-            "temperature": 0.1,
-            "num_predict": 450,
-            "num_ctx": 4096,
-        },
+    sentences = extract_relevant_sentences_from_documents(
+        documents=documents,
+        keywords=keywords,
+        max_sentences=5,
     )
 
-    answer = clean_portuguese_pt(response["message"]["content"])
-    return answer, metadatas, documents
+    if not sentences:
+        return FALLBACK_ANSWER, [], []
 
+    lines = ["Com base nos documentos disponíveis, encontrei esta informação sobre mudança de curso/transferência:"]
 
-# ============================================================
-# Pesquisa genérica RAG
-# ============================================================
+    for sentence in sentences:
+        lines.append(f"- {sentence}")
+
+    return "\n".join(lines), metadatas, documents
+
 
 def search_relevant_context(question: str, n_results: int = 6) -> Tuple[List[str], List[dict]]:
     if is_school_question(question):
@@ -1523,7 +2029,6 @@ def search_relevant_context(question: str, n_results: int = 6) -> Tuple[List[str
 
     collection = get_collection()
     embedding_model = get_embedding_model()
-
     query_embedding = embedding_model.encode([question]).tolist()[0]
 
     results = collection.query(
@@ -1531,10 +2036,7 @@ def search_relevant_context(question: str, n_results: int = 6) -> Tuple[List[str
         n_results=n_results,
     )
 
-    documents = results.get("documents", [[]])[0]
-    metadatas = results.get("metadatas", [[]])[0]
-
-    return documents, metadatas
+    return results.get("documents", [[]])[0], results.get("metadatas", [[]])[0]
 
 
 def build_prompt(question: str, context_chunks: List[str]) -> str:
@@ -1571,82 +2073,6 @@ Resposta:
 """.strip()
 
 
-# Mantive estas duas funções para compatibilidade, caso as queiras usar mais tarde.
-def build_compact_recommendation_context(metadatas: List[dict]) -> str:
-    lines = []
-
-    for idx, meta in enumerate(metadatas[:4], start=1):
-        curso = meta.get("curso", "")
-        grau = meta.get("grau", "")
-        escola = meta.get("escola", "")
-        area = meta.get("area", "")
-        local = meta.get("local", "")
-        resumo = meta.get("resumo", "")
-        interesses = meta.get("interesses_relacionados", "")
-        palavras_chave = meta.get("palavras_chave", "")
-        saidas = meta.get("saidas_profissionais", "")
-
-        if not curso:
-            continue
-
-        lines.append(
-            f"Opção {idx}:\n"
-            f"Curso: {curso}\n"
-            f"Grau: {grau}\n"
-            f"Escola: {escola}\n"
-            f"Local: {local}\n"
-            f"Área: {area}\n"
-            f"Resumo: {resumo}\n"
-            f"Interesses relacionados: {interesses}\n"
-            f"Palavras-chave: {palavras_chave}\n"
-            f"Saídas profissionais: {saidas}"
-        )
-
-    return "\n\n---\n\n".join(lines)
-
-
-def build_recommendation_prompt(question: str, compact_context: str) -> str:
-    return f"""
-És um assistente académico especializado na recomendação de cursos e formações do IPVC.
-
-Tarefa:
-Recomendar cursos com base no interesse indicado pelo utilizador.
-
-Regras obrigatórias:
-- Começa sempre a resposta com a frase: "Com base no teu interesse, recomendo:"
-- Usa apenas as opções presentes no contexto.
-- Não inventes cursos.
-- Não uses conhecimento externo.
-- Recomenda no máximo 3 opções.
-- Não apresentes cursos rejeitados.
-- Para cada opção, escreve apenas uma explicação curta.
-- Indica sempre o nome do curso, o grau e a escola.
-- Responde em português de Portugal.
-- Não uses "você".
-- Usa linguagem natural em português europeu.
-- Não uses expressões como "Espero que isso ajude".
-- Não uses markdown com negrito.
-- Usa apenas tópicos simples começados por "-".
-- A resposta deve ser curta e direta.
-- Usa apenas este formato: "- Nome do curso (Grau, Escola, Local) — explicação curta."
-- Não escrevas campos separados como "Curso:", "Grau:", "Escola:", "Local:", "Área:" ou "Resumo:".
-- Não repitas o mesmo curso com o mesmo grau.
-- Não incluas introduções longas.
-
-Contexto:
-{compact_context}
-
-Pergunta do utilizador:
-{question}
-
-Resposta:
-""".strip()
-
-
-# ============================================================
-# Função principal chamada pela app
-# ============================================================
-
 def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
     if is_out_of_scope_question(question):
         return FALLBACK_ANSWER, [], []
@@ -1662,7 +2088,6 @@ def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
 
         return build_direct_school_answer(metas, location=location), metas, docs
 
-    # Respostas diretas e completas para listagens de cursos.
     if is_structured_courses_question(question):
         degree = detect_degree(question)
         school_code = detect_school_code(question)
@@ -1670,35 +2095,27 @@ def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
         docs, metas = get_courses_filtered(degree=degree, school_code=school_code, location=location)
         return build_direct_courses_answer(metas, degree=degree, school_code=school_code, location=location), metas, docs
 
-    # Provas de ingresso devem ser tratadas antes das médias gerais.
     if is_entry_exam_question(question):
         return answer_entry_exam_question(question)
 
-    # Mudança de curso / transferência / reingresso.
     if is_transfer_question(question):
         return answer_transfer_question(question)
 
-    # Recomendação vem antes da admissão, para perguntas como:
-    # "Tenho média 14 e gosto de programação, que curso recomendas?"
+    if is_comparison_question(question):
+        return answer_comparison_question(question)
+
     if is_recommendation_question(question):
         context_chunks, metadatas = get_recommended_courses(question)
         return build_recommendation_answer(question, context_chunks, metadatas)
 
-    # Médias, vagas, notas do último colocado e dados DGES.
     if is_admission_question(question):
         return answer_admission_question(question)
 
-    # Saídas profissionais.
     if is_career_question(question):
         context_chunks, metadatas = match_courses_for_career_question(question)
         answer = build_career_answer(question, metadatas)
         return answer, metadatas, context_chunks
 
-    # Comparação entre cursos.
-    if is_comparison_question(question):
-        return answer_comparison_question(question)
-
-    # RAG genérico para restantes perguntas sobre documentos IPVC.
     context_chunks, metadatas = search_relevant_context(question)
 
     if not context_chunks:
