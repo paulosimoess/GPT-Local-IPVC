@@ -6,6 +6,12 @@ from difflib import SequenceMatcher
 import csv
 import chromadb
 import ollama
+
+import os
+
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+ollama_client = ollama.Client(host=OLLAMA_HOST)
+
 from sentence_transformers import SentenceTransformer
 
 
@@ -2321,7 +2327,7 @@ def ask_bot(question: str) -> Tuple[str, List[dict], List[str]]:
 
     prompt = build_prompt(question, context_chunks)
 
-    response = ollama.chat(
+    response = ollama_client.chat(
         model=OLLAMA_MODEL,
         messages=[{"role": "user", "content": prompt}],
         options={
